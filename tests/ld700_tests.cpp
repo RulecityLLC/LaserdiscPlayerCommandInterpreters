@@ -229,6 +229,43 @@ TEST_F(LD700Tests, search)
 	ld700_write_helper(0x42);
 }
 
+TEST_F(LD700Tests, search_edge_case)
+{
+	// This test ignores vblank and is more basic.
+	// We have other tests that tests searching using vblank.
+
+	EXPECT_CALL(mockLD700, BeginSearch(2345)).Times(2);
+	EXPECT_CALL(mockLD700, BeginSearch(6)).Times(1);
+	EXPECT_CALL(mockLD700, OnError(_, _)).Times(0);
+
+	ld700_write_helper(1);	// this should get dropped
+
+	// frame/time
+	ld700_write_helper(0x41);
+
+	// frame 2345
+	ld700_write_helper(2);
+	ld700_write_helper(3);
+	ld700_write_helper(4);
+	ld700_write_helper(5);
+
+	// begin search
+	ld700_write_helper(0x42);
+
+	// frame/time
+	ld700_write_helper(0x41);
+
+	// by not entering a frame number, it will remember and search to the previous frame
+
+	// begin search
+	ld700_write_helper(0x42);
+
+	// seek to frame 6 (should clear out previous frame)
+	ld700_write_helper(0x41);
+	ld700_write_helper(6);
+	ld700_write_helper(0x42);
+}
+
 TEST_F(LD700Tests, search_after_disc_flip)
 {
 	EXPECT_CALL(mockLD700, ChangeAudio(LD700_TRUE, LD700_TRUE));
@@ -360,6 +397,23 @@ TEST_F(LD700Tests, enable_text_overlay)
 	ld700i_on_vblank(m_curStatus);
 	ld700i_on_vblank(m_curStatus);
 	ld700_write_helper(0x07);	// enable text overlay
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+}
+
+TEST_F(LD700Tests, escape_by_itself_never_acks)
+{
+	m_curStatus = LD700_PLAYING;	// arbitrary
+	EXPECT_CALL(mockLD700, OnError(_, _)).Times(0);
+	EXPECT_CALL(mockLD700, OnExtAckChanged(_)).Times(0);	// escape by itself should never ACK
+
+	// make sure EXT_ACK' never changes
+	ld700_write_helper(0x5F);	// escape
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+	ld700_write_helper(0x5F);	// escape
 	ld700i_on_vblank(m_curStatus);
 	ld700i_on_vblank(m_curStatus);
 	ld700i_on_vblank(m_curStatus);

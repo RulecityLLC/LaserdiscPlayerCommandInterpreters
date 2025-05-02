@@ -28,7 +28,7 @@ typedef enum
 {
 	LD700I_STATE_NORMAL,
 	LD700I_STATE_ESCAPED,	// in the middle of an escape command
-	LD700I_STATE_FRAME,	// in the middle of receiving a frame
+	LD700I_STATE_FRAME,	// in the middle of receiving a frame number
 	LD700I_STATE_SEARCHING
 } LD700State_t;
 
@@ -71,7 +71,13 @@ void ld700i_reset()
 
 void ld700i_add_digit(uint8_t u8Digit)
 {
-	if (g_ld700i_u8FrameIdx < 5)
+	// the player will remember the previous frame and will only erase it once a digit is entered.
+	if (g_ld700i_u8FrameIdx == 0)
+	{
+		g_ld700i_u32Frame = u8Digit;
+		g_ld700i_u8FrameIdx++;
+	}
+	else if (g_ld700i_u8FrameIdx < 5)
 	{
 		g_ld700i_u32Frame *= 10;
 		g_ld700i_u32Frame += u8Digit;
@@ -185,12 +191,15 @@ void ld700i_write(uint8_t u8Cmd, const LD700Status_t status)
 			break;
 		case 0x41:	// prepare to enter frame number
 			g_ld700i_state = LD700I_STATE_FRAME;
+
+			// The player will remember the previous frame, but will erase it if a digit is entered.
+			// This means 0x41 0x42 will seek to the previous frame.
+			// To detect that a digit has not been entered, we set the frame index fo 0.
+			g_ld700i_u8FrameIdx = 0;
 			break;
 		case 0x42:	// begin search
 			g_ld700i_state = LD700I_STATE_NORMAL;
 			g_ld700i_begin_search(g_ld700i_u32Frame);
-			g_ld700i_u32Frame = 0;
-			g_ld700i_u8FrameIdx = 0;
 			break;
 		case 0x49:	// enable right
 			g_ld700i_change_audio(LD700_FALSE, LD700_TRUE);
@@ -236,6 +245,9 @@ void ld700i_write(uint8_t u8Cmd, const LD700Status_t status)
 		case 0x07:	// enable character generator display
 			// not supported, but we will control EXT_ACK'
 			u8NewCmdTimeoutVsyncCounter = NO_CHANGE;	// observed on real hardware (when disc is stopped, so maybe it's different if disc is playing)
+			break;
+		case 0x5F:	// repeated escapes are ignored (confirmed on real hardware)
+			u8NewCmdTimeoutVsyncCounter = NO_CHANGE;	// observed on real hardware, escapes by themselves do not cause ACK'
 			break;
 		}
 
