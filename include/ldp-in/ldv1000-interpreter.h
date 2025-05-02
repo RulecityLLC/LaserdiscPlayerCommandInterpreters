@@ -110,6 +110,8 @@ extern uint8_t (*g_ldv1000i_query_active_disc)();
 // extended command: begins switching to the newly requested disc (non-blocking, should return immediately).
 // Behaves like a search.
 // Use g_ldv1000i_get_status to report error/completion.
+// Use LDV1000_DISC_SWITCHING to indicate that the disc switch is still in progress.
+// Use LDV1000_STOPPED to indicate that the disc switch has completed successfully. Use LDV1000_ERROR to indicate failure.
 extern void (*g_ldv1000i_begin_changing_to_disc)(uint8_t idDisc);
 
 // extended command: enable/disable authentic seek delay
