@@ -300,16 +300,19 @@ TEST_F(LD700Tests, search_after_disc_flip)
 	ld700_write_helper_with_2_vblanks(LD700_TRUE, 0x42);
 }
 
-TEST_F(LD700Tests, too_many_digits)
+TEST_F(LD700Tests, seek_edge_cases_digits)
 {
-	EXPECT_CALL(mockLD700, OnError(LD700_ERR_TOO_MANY_DIGITS, _)).Times(1);
+	EXPECT_CALL(mockLD700, BeginSearch(34567));
 
 	ld700_write_helper(1);
+	ld700_write_helper(0x41);	// the 1 should be dropped
 	ld700_write_helper(2);
 	ld700_write_helper(3);
 	ld700_write_helper(4);
 	ld700_write_helper(5);
 	ld700_write_helper(6);
+	ld700_write_helper(7);	// an extra digit forces the first digit to be dropped
+	ld700_write_helper(0x42);	// execute search
 }
 
 TEST_F(LD700Tests, repeated_command_ignored)
