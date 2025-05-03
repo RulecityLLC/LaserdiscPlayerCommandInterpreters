@@ -33,13 +33,21 @@ typedef enum
 } LD700State_t;
 
 LD700State_t g_ld700i_state;
-uint32_t g_ld700i_u32Frame;
-uint8_t g_ld700i_u8FrameIdx;
+uint8_t g_ld700i_numBuf[5];	// the number buffer can wraparound to the beginning of it gets too many digits
+uint8_t *g_ld700i_pNumBufStart = 0;
+uint8_t *g_ld700i_pNumBufEnd = 0;
+const uint8_t *g_ld700i_pNumBufLastGoodPtr = (g_ld700i_numBuf + sizeof(g_ld700i_numBuf) - 1);
+uint8_t g_ld700i_u8NumBufCount = 0;	// this shows how many bytes are in the number buffer
+#define NUM_BUF_WRAP(var) 	if (var > g_ld700i_pNumBufLastGoodPtr) var = g_ld700i_numBuf;
+
 uint8_t g_ld700i_u8CmdTimeoutVsyncCounter;	// to detect duplicate commands to be dropped
 LD700_BOOL g_ld700i_bNewCmdReceived;	// whether we've received a new command (as opposed to a dupe)
 LD700_BOOL g_ld700i_bExtAckActive;
+LD700_BOOL g_ld700i_bNumBufResetArmed;	// whether we will clear the num buf if any digit is received
 uint8_t g_ld700i_u8QueuedCmd;
 uint8_t g_ld700i_u8LastCmd;	// to drop rapidly repeated commands
+
+//////////////////////////////////////////////
 
 // call every time you want EXT_ACK' to be a certain value.  The method will track if it's changed and trigger the callback if needed.
 void ld700i_change_ext_ack(LD700_BOOL bActive)
@@ -54,8 +62,9 @@ void ld700i_change_ext_ack(LD700_BOOL bActive)
 
 void ld700i_reset()
 {
-	g_ld700i_u32Frame = 0;
-	g_ld700i_u8FrameIdx = 0;
+	g_ld700i_pNumBufStart = g_ld700i_numBuf;
+	g_ld700i_pNumBufEnd = g_ld700i_numBuf;
+	g_ld700i_u8NumBufCount = 0;
 	g_ld700i_u8CmdTimeoutVsyncCounter = 0;
 	g_ld700i_bNewCmdReceived = LD700_FALSE;
 
@@ -63,6 +72,7 @@ void ld700i_reset()
 	g_ld700i_bExtAckActive = LD700_TRUE;
 	ld700i_change_ext_ack(LD700_FALSE);
 
+	g_ld700i_bNumBufResetArmed = LD700_FALSE;
 	g_ld700i_cmd_state = LD700I_CMD_PREFIX;
 	g_ld700i_u8QueuedCmd = 0;	// apparently is not needed
 	g_ld700i_u8LastCmd = 0xFF;
@@ -72,22 +82,25 @@ void ld700i_reset()
 void ld700i_add_digit(uint8_t u8Digit)
 {
 	// the player will remember the previous frame and will only erase it once a digit is entered.
-	if (g_ld700i_u8FrameIdx == 0)
+	if (g_ld700i_bNumBufResetArmed)
 	{
-		g_ld700i_u32Frame = u8Digit;
-		g_ld700i_u8FrameIdx++;
-	}
-	else if (g_ld700i_u8FrameIdx < 5)
-	{
-		g_ld700i_u32Frame *= 10;
-		g_ld700i_u32Frame += u8Digit;
-		g_ld700i_u8FrameIdx++;
+		// erase anything that was in the buffer
+		g_ld700i_pNumBufStart = g_ld700i_pNumBufEnd;
+		g_ld700i_u8NumBufCount = 0;
+		g_ld700i_bNumBufResetArmed = LD700_FALSE;
 	}
 
-	// TODO : test this on a real player to see what it does
-	else
+	*g_ld700i_pNumBufEnd = u8Digit;
+	g_ld700i_pNumBufEnd++;
+	NUM_BUF_WRAP(g_ld700i_pNumBufEnd);
+	g_ld700i_u8NumBufCount++;
+
+	// if they enter too many digits, we start dropping digits from the beginning
+	if (g_ld700i_u8NumBufCount > 5)
 	{
-		g_ld700i_error(LD700_ERR_TOO_MANY_DIGITS, 0);
+		g_ld700i_pNumBufStart++;
+		NUM_BUF_WRAP(g_ld700i_pNumBufStart);
+		g_ld700i_u8NumBufCount = 5;
 	}
 }
 
@@ -194,12 +207,27 @@ void ld700i_write(uint8_t u8Cmd, const LD700Status_t status)
 
 			// The player will remember the previous frame, but will erase it if a digit is entered.
 			// This means 0x41 0x42 will seek to the previous frame.
-			// To detect that a digit has not been entered, we set the frame index fo 0.
-			g_ld700i_u8FrameIdx = 0;
+			g_ld700i_bNumBufResetArmed = LD700_TRUE;
 			break;
 		case 0x42:	// begin search
+		{
+			// TODO : check to see if we're in a search state?
+
+			uint32_t u32Frame = 0;
+			uint8_t *bufStartTmp = g_ld700i_pNumBufStart;
+			uint8_t u8NumBufCountTmp = g_ld700i_u8NumBufCount;
+			while (u8NumBufCountTmp != 0)
+			{
+				uint8_t u8 = *bufStartTmp;
+				u32Frame *= 10;
+				u32Frame += u8;
+				bufStartTmp++;
+				NUM_BUF_WRAP(bufStartTmp);
+				u8NumBufCountTmp--;
+			}
 			g_ld700i_state = LD700I_STATE_NORMAL;
-			g_ld700i_begin_search(g_ld700i_u32Frame);
+			g_ld700i_begin_search(u32Frame);
+		}
 			break;
 		case 0x49:	// enable right
 			g_ld700i_change_audio(LD700_FALSE, LD700_TRUE);
