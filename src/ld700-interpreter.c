@@ -6,6 +6,10 @@
  * - If the tray is closed but no disc is present (something we probably will never emulate), when the play command is sent,
  *		after 11ms from receiving the play command, the LD-700 will respond with a single (~16ms) pulse low of the ACK line.
  * - If a seek command is received while the player is currently seeking, the player will start seeking to the newly requested frame (ACK' will stay low).
+ * - Sending the following commands (4A,4A,[corrupt],4A) with 20ms intervals keeps EXT_ACK' low throughout.
+ *		Adding two consecutive corrupted commands causes EXT_ACK' to go high when the next command starts (after the two corrupted commands).
+ *		Having 20ms between or 80ms between commands doesn't seem to make a difference.
+ *		Trying to emulate this exact behavior is probably not worth the effort, so I'm just making a note of it here.
  */
 
 // callbacks, must be assigned before calling any other function in this interpreter
