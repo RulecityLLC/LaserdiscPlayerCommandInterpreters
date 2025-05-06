@@ -295,9 +295,7 @@ done:
 
 void ld700i_on_vblank(const LD700Status_t stat)
 {
-	LD700_BOOL bExtAckEnabled = (g_ld700i_u8CmdTimeoutVsyncCounter != 0)
-		|| (stat == LD700_SEARCHING)
-		|| (stat == LD700_SPINNING_UP);
+	LD700_BOOL bExtAckEnabled = (g_ld700i_u8CmdTimeoutVsyncCounter != 0);
 
 	// when new command comes in, EXT_ACK' pulses high for 1 vsync (overriding other behavior)
 	if (g_ld700i_bNewCmdReceived)
@@ -305,6 +303,9 @@ void ld700i_on_vblank(const LD700Status_t stat)
 		g_ld700i_bNewCmdReceived = LD700_FALSE;
 		bExtAckEnabled = LD700_FALSE;
 	}
+
+	// searching/spinning-up trumps all
+	bExtAckEnabled |= ((stat == LD700_SEARCHING) || (stat == LD700_SPINNING_UP));
 
 	// EXT_ACK' is active after a command has been received or if the disc is searching/spinning-up
 	ld700i_change_ext_ack(bExtAckEnabled);
