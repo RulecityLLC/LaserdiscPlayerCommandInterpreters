@@ -1,5 +1,13 @@
 #include <ldp-in/ld700-interpreter.h>
 
+/*
+ * NOTES about how the real LD-700 behaves that we may or may not include in this interpreter.
+ *
+ * - If the tray is closed but no disc is present (something we probably will never emulate), when the play command is sent,
+ *		after 11ms from receiving the play command, the LD-700 will respond with a single (~16ms) pulse low of the ACK line.
+ * - If a seek command is received while the player is currently seeking, the player will start seeking to the newly requested frame (ACK' will stay low).
+ */
+
 // callbacks, must be assigned before calling any other function in this interpreter
 void (*g_ld700i_play)() = 0;
 void (*g_ld700i_pause)() = 0;
@@ -8,6 +16,7 @@ void (*g_ld700i_eject)() = 0;
 void (*g_ld700i_step)(LD700_BOOL bBackward) = 0;
 void (*g_ld700i_begin_search)(uint32_t uFrameNumber) = 0;
 void (*g_ld700i_change_audio)(LD700_BOOL bEnableLeft, LD700_BOOL bEnableRight) = 0;
+void (*g_ld700i_change_audio_squelch)(LD700_BOOL bSquelched) = 0;
 void (*g_ld700i_error)(LD700ErrCode_t code, uint8_t u8Val) = 0;
 void (*g_ld700i_on_ext_ack_changed)(LD700_BOOL bActive) = 0;
 
@@ -27,7 +36,6 @@ LD700CmdState_t g_ld700i_cmd_state = LD700I_CMD_PREFIX;
 typedef enum
 {
 	LD700I_STATE_NORMAL,
-	LD700I_STATE_ESCAPED,	// in the middle of an escape command
 	LD700I_STATE_FRAME,	// in the middle of receiving a frame number
 	LD700I_STATE_SEARCHING
 } LD700State_t;
@@ -46,6 +54,7 @@ LD700_BOOL g_ld700i_bExtAckActive;
 LD700_BOOL g_ld700i_bNumBufResetArmed;	// whether we will clear the num buf if any digit is received
 uint8_t g_ld700i_u8QueuedCmd;
 uint8_t g_ld700i_u8LastCmd;	// to drop rapidly repeated commands
+LD700_BOOL g_ld700i_bEscapedActive;	// whether we are in the middle of an escaped command
 
 //////////////////////////////////////////////
 
@@ -77,6 +86,7 @@ void ld700i_reset()
 	g_ld700i_u8QueuedCmd = 0;	// apparently is not needed
 	g_ld700i_u8LastCmd = 0xFF;
 	g_ld700i_state = LD700I_STATE_NORMAL;
+	g_ld700i_bEscapedActive = LD700_FALSE;
 }
 
 void ld700i_add_digit(uint8_t u8Digit)
@@ -158,7 +168,7 @@ void ld700i_write(uint8_t u8Cmd, const LD700Status_t status)
 	g_ld700i_bNewCmdReceived = LD700_TRUE;
 
 	// if we're receiving a normal command
-	if (g_ld700i_state != LD700I_STATE_ESCAPED)
+	if (!g_ld700i_bEscapedActive)
 	{
 		switch (g_ld700i_u8QueuedCmd)
 		{
@@ -250,7 +260,7 @@ void ld700i_write(uint8_t u8Cmd, const LD700Status_t status)
 			g_ld700i_step(LD700_FALSE);
 			break;
 		case 0x5F:	// escape
-			g_ld700i_state = LD700I_STATE_ESCAPED;
+			g_ld700i_bEscapedActive = LD700_TRUE;
 			u8NewCmdTimeoutVsyncCounter = NO_CHANGE;
 			break;
 		}
@@ -258,6 +268,9 @@ void ld700i_write(uint8_t u8Cmd, const LD700Status_t status)
 	// else we're receiving an escaped command
 	else
 	{
+		// in most cases, after we process an escape command, we'll start processing normal commands again
+		g_ld700i_bEscapedActive = LD700_FALSE;
+
 		switch (g_ld700i_u8QueuedCmd)
 		{
 		default:	// unknown
@@ -265,10 +278,14 @@ void ld700i_write(uint8_t u8Cmd, const LD700Status_t status)
 			break;
 		case 0x02:	// disable video
 		case 0x03:	// enable video
-		case 0x04:	// disable audio
-		case 0x05:	// enable audio
 		case 0x06:	// disable character generator display
 			// not supported, but we will control EXT_ACK'
+			break;
+		case 0x04:	// disable audio
+			g_ld700i_change_audio_squelch(LD700_TRUE);
+			break;
+		case 0x05:	// enable audio
+			g_ld700i_change_audio_squelch(LD700_FALSE);
 			break;
 		case 0x07:	// enable character generator display
 			// not supported, but we will control EXT_ACK'
@@ -276,10 +293,9 @@ void ld700i_write(uint8_t u8Cmd, const LD700Status_t status)
 			break;
 		case 0x5F:	// repeated escapes are ignored (confirmed on real hardware)
 			u8NewCmdTimeoutVsyncCounter = NO_CHANGE;	// observed on real hardware, escapes by themselves do not cause ACK'
+			g_ld700i_bEscapedActive = LD700_TRUE;
 			break;
 		}
-
-		g_ld700i_state = LD700I_STATE_NORMAL;
 	}
 
 	// to detect duplicates

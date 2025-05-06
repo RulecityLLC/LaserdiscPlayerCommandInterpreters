@@ -54,6 +54,9 @@ extern void (*g_ld700i_begin_search)(uint32_t uFrameNumber);
 // enables/disables left/right audio channels
 extern void (*g_ld700i_change_audio)(LD700_BOOL bEnableLeft, LD700_BOOL bEnableRight);
 
+// enables/disables audio squelch
+extern void (*g_ld700i_change_audio_squelch)(LD700_BOOL bSquelched);
+
 // will get called every time the EXT ACK line changes. This line is active low, so bActive=true means the line has gone low.
 extern void (*g_ld700i_on_ext_ack_changed)(LD700_BOOL bActive);
 

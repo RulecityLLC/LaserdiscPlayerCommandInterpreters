@@ -221,6 +221,8 @@ public:
 
 	// virtual void ChangeAudio(uint8_t u8Channel, LD700_BOOL bActive) = 0;
 	MOCK_METHOD2(ChangeAudio, void(uint8_t,LD700_BOOL));
+
+	MOCK_METHOD1(ChangeAudioSquelch, void(LD700_BOOL));
 };
 
 #endif //LDP_IN_MOCKS_H
