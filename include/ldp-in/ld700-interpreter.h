@@ -23,6 +23,10 @@ LD700Status_t;
 // resets all globals to default state
 void ld700i_reset();
 
+// Indicates that the 'leader' (low for 8 ms, high for 4 ms) has been seen and to expect a new 4-byte command.
+// Usage of this is optional as the interpreter can still work without it, but can recover from invalid input faster if it is implemented.
+void ld700i_on_new_cmd();
+
 // sends control byte (for example, 0xA8)
 void ld700i_write(uint8_t u8Cmd, LD700Status_t status);
 
