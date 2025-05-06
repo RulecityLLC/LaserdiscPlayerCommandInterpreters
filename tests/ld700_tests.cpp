@@ -469,7 +469,7 @@ TEST_F(LD700Tests, enable_text_overlay)
 {
 	m_curStatus = LD700_STOPPED;
 	EXPECT_CALL(mockLD700, OnError(_, _)).Times(0);
-	EXPECT_CALL(mockLD700, OnExtAckChanged(_)).Times(0);	// reject should not ACK
+	EXPECT_CALL(mockLD700, OnExtAckChanged(_)).Times(0);	// no ACK expected
 
 	// make sure EXT_ACK' never changes
 	ld700_write_helper(0x5F);	// escape
@@ -497,6 +497,31 @@ TEST_F(LD700Tests, escape_by_itself_never_acks)
 	ld700i_on_vblank(m_curStatus);
 	ld700i_on_vblank(m_curStatus);
 	ld700i_on_vblank(m_curStatus);
+}
+
+TEST_F(LD700Tests, escape_has_no_timeout)
+{
+	m_curStatus = LD700_PLAYING;	// arbitrary
+	EXPECT_CALL(mockLD700, OnError(_, _)).Times(0);
+	EXPECT_CALL(mockLD700, ChangeAudioSquelch(LD700_TRUE)).Times(1);
+
+	ld700_write_helper(0x5F);	// escape
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+	ld700_write_helper(0x4);	// audio squelch
 }
 
 TEST_F(LD700Tests, boot1)
