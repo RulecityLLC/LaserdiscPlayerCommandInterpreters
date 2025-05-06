@@ -120,6 +120,11 @@ void ld700i_cmd_error(uint8_t u8Cmd)
 	g_ld700i_cmd_state = LD700I_CMD_PREFIX;
 }
 
+void ld700i_on_new_cmd()
+{
+	g_ld700i_cmd_state = LD700I_CMD_PREFIX;
+}
+
 // 0 means something else so we need another distinct value to indicate no change
 #define NO_CHANGE 0xFF
 

@@ -129,6 +129,25 @@ TEST_F(LD700Tests, cmd_pattern1)
 	ld700i_write(0, m_curStatus);	// error because it's not 0 XOR FF
 }
 
+TEST_F(LD700Tests, recovery_using_leader)
+{
+	ld700i_write(0xA8, m_curStatus);	// incomplete command
+
+	EXPECT_CALL(mockLD700, ChangeAudioSquelch(LD700_TRUE));
+	ld700i_on_new_cmd();
+	ld700_write_helper(0x5F);
+	ld700_write_helper(4);
+
+	ld700i_write(0xA8, m_curStatus);
+	ld700i_write(0xA8 ^ 0xFF, m_curStatus);
+	ld700i_write(0, m_curStatus);	// incomplete command
+
+	EXPECT_CALL(mockLD700, ChangeAudioSquelch(LD700_TRUE));
+	ld700i_on_new_cmd();
+	ld700_write_helper(0x5F);
+	ld700_write_helper(4);
+}
+
 TEST_F(LD700Tests, reject_from_playing)
 {
 	m_curStatus = LD700_PLAYING;
