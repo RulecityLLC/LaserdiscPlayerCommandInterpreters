@@ -124,7 +124,7 @@ TEST_F(LD700Tests, cmd_pattern1)
 	ld700i_write(0xA8 ^ 0xFF, m_curStatus);
 
 	ld700i_write(0, m_curStatus);	// arbitrary
-	ld700i_write(0, m_curStatus);	// error
+	ld700i_write(0, m_curStatus);	// error because it's not 0 XOR FF
 }
 
 TEST_F(LD700Tests, reject_from_playing)
@@ -509,4 +509,16 @@ TEST_F(LD700Tests, disc_spinning_up)
 
 	// make it easy to troubleshoot problems
 	ASSERT_TRUE(Mock::VerifyAndClearExpectations(&mockLD700));
+
+	// ACK' line should not change while disc is spinning up
+	EXPECT_CALL(mockLD700, OnExtAckChanged(LD700_FALSE)).Times(0);
+
+	EXPECT_CALL(mockLD700, ChangeAudio(LD700_TRUE, LD700_TRUE)).Times(1);
+
+	ld700i_on_vblank(m_curStatus);
+
+	ld700_write_helper(0x4A);
+	ld700i_on_vblank(m_curStatus);
+
+	// sending 4A during disc spin-up should not cause any change to ACK line
 }
