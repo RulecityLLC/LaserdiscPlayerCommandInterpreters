@@ -13,6 +13,7 @@ public:
 	static void on_ext_ack_changed(LD700_BOOL bActive) { m_pInstance->OnExtAckChanged(bActive); }
 	static void on_error(LD700ErrCode_t err, uint8_t val) { m_pInstance->OnError(err, val); }
 	static void change_audio(LD700_BOOL bEnableLeft, LD700_BOOL bEnableRight) { m_pInstance->ChangeAudio(bEnableLeft, bEnableRight); }
+	static void change_audio_squelch(LD700_BOOL bSquelched) { m_pInstance->ChangeAudioSquelch(bSquelched); }
 
 	static void setup(ILD700Test *pInstance)
 	{
@@ -26,13 +27,14 @@ public:
 		g_ld700i_on_ext_ack_changed = on_ext_ack_changed;
 		g_ld700i_error = on_error;
 		g_ld700i_change_audio = change_audio;
+		g_ld700i_change_audio_squelch = change_audio_squelch;
 	}
 
 private:
 	static ILD700Test *m_pInstance;
 };
 
-ILD700Test *ld700_test_wrapper::m_pInstance = 0;
+ILD700Test *ld700_test_wrapper::m_pInstance = nullptr;
 
 class LD700Tests : public ::testing::Test
 {
@@ -300,6 +302,49 @@ TEST_F(LD700Tests, search_after_disc_flip)
 	ld700_write_helper_with_2_vblanks(LD700_TRUE, 0x42);
 }
 
+TEST_F(LD700Tests, search_with_mixed_audio_squelch)
+{
+	m_curStatus = LD700_PAUSED;
+
+	// NOTE: For simplicity, commands are spaced out enough that EXT_ACK' deactivates before next command
+
+	// frame/time
+	ld700_write_helper_with_2_vblanks(LD700_TRUE, 0x41);
+	wait_vblanks_for_ext_ack_change(LD700_FALSE, 3);
+
+	ld700_write_helper_with_2_vblanks(LD700_TRUE, 1);
+	wait_vblanks_for_ext_ack_change(LD700_FALSE, 3);
+
+	ld700_write_helper_with_2_vblanks(LD700_TRUE, 2);
+	wait_vblanks_for_ext_ack_change(LD700_FALSE, 3);
+
+	ld700_write_helper_with_2_vblanks(LD700_TRUE, 3);
+	wait_vblanks_for_ext_ack_change(LD700_FALSE, 3);
+
+	ld700_write_helper_with_2_vblanks(LD700_TRUE, 4);
+	wait_vblanks_for_ext_ack_change(LD700_FALSE, 3);
+
+	ld700_write_helper(0x5F);	// sending ESCAPE does not cause ACK' to go low
+	ld700i_on_vblank(m_curStatus);	// to match the surrounding commands that wait for 2 vblanks
+	ld700i_on_vblank(m_curStatus);
+
+	EXPECT_CALL(mockLD700, ChangeAudioSquelch(LD700_TRUE));
+	ld700_write_helper_with_2_vblanks(LD700_TRUE, 4);	// audio squelch
+	wait_vblanks_for_ext_ack_change(LD700_FALSE, 3);
+
+	ld700_write_helper_with_2_vblanks(LD700_TRUE, 5);
+	wait_vblanks_for_ext_ack_change(LD700_FALSE, 3);
+
+	EXPECT_CALL(mockLD700, BeginSearch(12345));
+	ld700_write_helper_with_2_vblanks(LD700_TRUE, 0x42);
+
+	// we don't expect ACK' to go high again
+	m_curStatus = LD700_SEARCHING;
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+}
+
 TEST_F(LD700Tests, seek_edge_cases_digits)
 {
 	EXPECT_CALL(mockLD700, BeginSearch(34567));
@@ -312,6 +357,19 @@ TEST_F(LD700Tests, seek_edge_cases_digits)
 	ld700_write_helper(5);
 	ld700_write_helper(6);
 	ld700_write_helper(7);	// an extra digit forces the first digit to be dropped
+	ld700_write_helper(0x42);	// execute search
+}
+
+TEST_F(LD700Tests, seek_edge_cases_digit2)
+{
+	EXPECT_CALL(mockLD700, BeginSearch(34));
+
+	ld700_write_helper(0x41);
+	ld700_write_helper(1);
+	ld700_write_helper(2);
+	ld700_write_helper(0x41);	// '12' should be dropped
+	ld700_write_helper(3);
+	ld700_write_helper(4);
 	ld700_write_helper(0x42);	// execute search
 }
 
@@ -446,6 +504,7 @@ TEST_F(LD700Tests, boot1)
 
 	ASSERT_TRUE(Mock::VerifyAndClearExpectations(&mockLD700));
 
+	EXPECT_CALL(mockLD700, ChangeAudioSquelch(LD700_TRUE));
 	ld700_write_helper_with_2_vblanks(LD700_TRUE, 0x04);
 	wait_vblanks_for_ext_ack_change(LD700_FALSE, 3);
 
@@ -484,6 +543,7 @@ TEST_F(LD700Tests, boot2)
 	// EXT_ACK' is already inactive and sending this command won't change that
 	ld700_write_helper(0x5F);
 
+	EXPECT_CALL(mockLD700, ChangeAudioSquelch(LD700_FALSE));
 	ld700_write_helper_with_2_vblanks(LD700_TRUE, 0x05);
 	wait_vblanks_for_ext_ack_change(LD700_FALSE, 3);
 	ASSERT_TRUE(Mock::VerifyAndClearExpectations(&mockLD700));
