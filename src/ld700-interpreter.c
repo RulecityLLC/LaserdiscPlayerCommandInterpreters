@@ -10,6 +10,8 @@
  *		Adding two consecutive corrupted commands causes EXT_ACK' to go high when the next command starts (after the two corrupted commands).
  *		Having 20ms between or 80ms between commands doesn't seem to make a difference.
  *		Trying to emulate this exact behavior is probably not worth the effort, so I'm just making a note of it here.
+ * - If a play command is sent before a seek finishes, the play command is queued and executes once the seek completes.
+ * - If a pause command is sent while the disc is spinning up, it is ignored and the disc plays once spin-up finishes.
  */
 
 // callbacks, must be assigned before calling any other function in this interpreter
@@ -214,7 +216,15 @@ void ld700i_write(uint8_t u8Cmd, const LD700Status_t status)
 		case 0x7:
 		case 0x8:
 		case 0x9:	// 9
-			ld700i_add_digit(g_ld700i_u8QueuedCmd);
+			// digits are ignored if disc is stopped
+			if (status != LD700_STOPPED)
+			{
+				ld700i_add_digit(g_ld700i_u8QueuedCmd);
+			}
+			else
+			{
+				u8NewCmdTimeoutVsyncCounter = NO_CHANGE;
+			}
 			break;
 		case 0x16: // reject
 			if ((status == LD700_PLAYING) || (status == LD700_PAUSED))
@@ -242,15 +252,24 @@ void ld700i_write(uint8_t u8Cmd, const LD700Status_t status)
 			g_ld700i_pause();
 			break;
 		case 0x41:	// prepare to enter frame number
-			g_ld700i_state = LD700I_STATE_FRAME;
 
-			// The player will remember the previous frame, but will erase it if a digit is entered.
-			// This means 0x41 0x42 will seek to the previous frame.
-			g_ld700i_bNumBufResetArmed = LD700_TRUE;
+			// frame number entry is ignored if disc is stopped
+			if (status != LD700_STOPPED)
+			{
+				g_ld700i_state = LD700I_STATE_FRAME;
+
+				// The player will remember the previous frame, but will erase it if a digit is entered.
+				// This means 0x41 0x42 will seek to the previous frame.
+				g_ld700i_bNumBufResetArmed = LD700_TRUE;
+			}
+			else
+			{
+				u8NewCmdTimeoutVsyncCounter = NO_CHANGE;
+			}
 			break;
 		case 0x42:	// begin search
 		{
-			if (g_ld700i_state == LD700I_STATE_FRAME)
+			if ((g_ld700i_state == LD700I_STATE_FRAME) && (status != LD700_STOPPED))
 			{
 				uint32_t u32Frame = 0;
 				uint8_t *bufStartTmp = g_ld700i_pNumBufStart;
@@ -267,7 +286,7 @@ void ld700i_write(uint8_t u8Cmd, const LD700Status_t status)
 				g_ld700i_state = LD700I_STATE_NORMAL;
 				g_ld700i_begin_search(u32Frame);
 			}
-			// the original player does not ACK if not in 'enter number' mode
+			// the original player does not ACK if not in 'enter number' mode or if disc is stopped
 			else
 			{
 				u8NewCmdTimeoutVsyncCounter = NO_CHANGE;
@@ -317,6 +336,7 @@ void ld700i_write(uint8_t u8Cmd, const LD700Status_t status)
 		case 0x02:	// disable video
 		case 0x03:	// enable video
 		case 0x06:	// disable character generator display
+		case 0x07:	// enable character generator display
 			// not supported, but we will control EXT_ACK'
 			break;
 		case 0x04:	// disable audio
@@ -324,10 +344,6 @@ void ld700i_write(uint8_t u8Cmd, const LD700Status_t status)
 			break;
 		case 0x05:	// enable audio
 			g_ld700i_change_audio_squelch(LD700_FALSE);
-			break;
-		case 0x07:	// enable character generator display
-			// not supported, but we will control EXT_ACK'
-			u8NewCmdTimeoutVsyncCounter = NO_CHANGE;	// observed on real hardware (when disc is stopped, so maybe it's different if disc is playing)
 			break;
 		case 0x45:	// clear
 			ld700i_clear();
