@@ -524,6 +524,34 @@ TEST_F(LD700Tests, escape_has_no_timeout)
 	ld700_write_helper(0x4);	// audio squelch
 }
 
+TEST_F(LD700Tests, escape_gets_cleared)
+{
+	m_curStatus = LD700_PLAYING;	// arbitrary
+	EXPECT_CALL(mockLD700, OnError(_, _)).Times(0);
+	EXPECT_CALL(mockLD700, ChangeAudioSquelch(LD700_TRUE)).Times(0);
+
+	ld700_write_helper(0x5F);	// escape
+	ld700_write_helper(0x45);	// clear
+	ld700_write_helper(0x4);	// audio squelch	(should not take effect since we cleared)
+}
+
+TEST_F(LD700Tests, clear_inside_search_with_escape)
+{
+	m_curStatus = LD700_PLAYING;	// arbitrary
+	EXPECT_CALL(mockLD700, OnError(_, _)).Times(0);
+	EXPECT_CALL(mockLD700, BeginSearch(5)).Times(1);
+
+	ld700_write_helper(0x41);
+	ld700_write_helper(0x01);
+	ld700_write_helper(0x02);
+	ld700_write_helper(0x03);
+	ld700_write_helper(0x04);
+	ld700_write_helper(0x5F);	// escape
+	ld700_write_helper(0x45);	// clear
+	ld700_write_helper(0x5);	// digit 5
+	ld700_write_helper(0x42);
+}
+
 TEST_F(LD700Tests, boot1)
 {
 	EXPECT_CALL(mockLD700, OnError(_, _)).Times(0);
