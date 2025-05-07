@@ -40,8 +40,7 @@ LD700CmdState_t g_ld700i_cmd_state = LD700I_CMD_PREFIX;
 typedef enum
 {
 	LD700I_STATE_NORMAL,
-	LD700I_STATE_FRAME,	// in the middle of receiving a frame number
-	LD700I_STATE_SEARCHING
+	LD700I_STATE_FRAME	// in the middle of receiving a frame number
 } LD700State_t;
 
 LD700State_t g_ld700i_state;
@@ -338,31 +337,5 @@ void ld700i_on_vblank(const LD700Status_t stat)
 	if (g_ld700i_u8CmdTimeoutVsyncCounter != 0)
 	{
 		g_ld700i_u8CmdTimeoutVsyncCounter--;
-	}
-
-	switch (g_ld700i_state)
-	{
-		// nothing to do
-	default:
-		break;
-	// if we are in the middle of a search
-	case LD700I_STATE_SEARCHING:
-		{
-			switch (stat)
-			{
-				// if search is complete
-			case LD700_PAUSED:
-				g_ld700i_state = LD700I_STATE_NORMAL;
-				break;
-				// if we're still working, do nothing
-			case LD700_SEARCHING:
-				break;
-			default:
-				g_ld700i_state = LD700I_STATE_NORMAL;
-				g_ld700i_error(LD700_ERR_UNHANDLED_SITUATION, 0);
-				break;
-			}
-		}
-		break;
 	}
 }
