@@ -127,17 +127,21 @@ void ld700i_clear()
 {
 	g_ld700i_bEscapedActive = LD700_FALSE;
 
-	// if user has started entering in a number, we clear it but stay in 'retrieve number' mode
-	if (g_ld700i_u8NumBufCount != 0)
+	if (g_ld700i_state == LD700I_STATE_FRAME)
 	{
-		g_ld700i_pNumBufStart = g_ld700i_pNumBufEnd;
-		g_ld700i_u8NumBufCount = 0;
+		// if user has started entering in a number, we clear it but stay in 'retrieve number' mode
+		if (g_ld700i_u8NumBufCount != 0)
+		{
+			g_ld700i_pNumBufStart = g_ld700i_pNumBufEnd;
+			g_ld700i_u8NumBufCount = 0;
+		}
+		// else we leave 'entering in a number' mode
+		else
+		{
+			g_ld700i_state = LD700I_STATE_NORMAL;
+		}
 	}
-	// else we leave 'entering in a number' mode
-	else
-	{
-		// TODO : write a test for this one
-	}
+	// else nothing to clear
 }
 
 void ld700i_on_new_cmd()
@@ -246,22 +250,28 @@ void ld700i_write(uint8_t u8Cmd, const LD700Status_t status)
 			break;
 		case 0x42:	// begin search
 		{
-			// TODO : check to see if we're in a search state?
-
-			uint32_t u32Frame = 0;
-			uint8_t *bufStartTmp = g_ld700i_pNumBufStart;
-			uint8_t u8NumBufCountTmp = g_ld700i_u8NumBufCount;
-			while (u8NumBufCountTmp != 0)
+			if (g_ld700i_state == LD700I_STATE_FRAME)
 			{
-				uint8_t u8 = *bufStartTmp;
-				u32Frame *= 10;
-				u32Frame += u8;
-				bufStartTmp++;
-				NUM_BUF_WRAP(bufStartTmp);
-				u8NumBufCountTmp--;
+				uint32_t u32Frame = 0;
+				uint8_t *bufStartTmp = g_ld700i_pNumBufStart;
+				uint8_t u8NumBufCountTmp = g_ld700i_u8NumBufCount;
+				while (u8NumBufCountTmp != 0)
+				{
+					uint8_t u8 = *bufStartTmp;
+					u32Frame *= 10;
+					u32Frame += u8;
+					bufStartTmp++;
+					NUM_BUF_WRAP(bufStartTmp);
+					u8NumBufCountTmp--;
+				}
+				g_ld700i_state = LD700I_STATE_NORMAL;
+				g_ld700i_begin_search(u32Frame);
 			}
-			g_ld700i_state = LD700I_STATE_NORMAL;
-			g_ld700i_begin_search(u32Frame);
+			// the original player does not ACK if not in 'enter number' mode
+			else
+			{
+				u8NewCmdTimeoutVsyncCounter = NO_CHANGE;
+			}
 		}
 			break;
 		case 0x45:	// clear
