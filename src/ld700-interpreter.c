@@ -123,6 +123,23 @@ void ld700i_cmd_error(uint8_t u8Cmd)
 	g_ld700i_cmd_state = LD700I_CMD_PREFIX;
 }
 
+void ld700i_clear()
+{
+	g_ld700i_bEscapedActive = LD700_FALSE;
+
+	// if user has started entering in a number, we clear it but stay in 'retrieve number' mode
+	if (g_ld700i_u8NumBufCount != 0)
+	{
+		g_ld700i_pNumBufStart = g_ld700i_pNumBufEnd;
+		g_ld700i_u8NumBufCount = 0;
+	}
+	// else we leave 'entering in a number' mode
+	else
+	{
+		// TODO : write a test for this one
+	}
+}
+
 void ld700i_on_new_cmd()
 {
 	g_ld700i_cmd_state = LD700I_CMD_PREFIX;
@@ -247,6 +264,9 @@ void ld700i_write(uint8_t u8Cmd, const LD700Status_t status)
 			g_ld700i_begin_search(u32Frame);
 		}
 			break;
+		case 0x45:	// clear
+			ld700i_clear();
+			break;
 		case 0x49:	// enable right
 			g_ld700i_change_audio(LD700_FALSE, LD700_TRUE);
 			break;
@@ -298,6 +318,9 @@ void ld700i_write(uint8_t u8Cmd, const LD700Status_t status)
 		case 0x07:	// enable character generator display
 			// not supported, but we will control EXT_ACK'
 			u8NewCmdTimeoutVsyncCounter = NO_CHANGE;	// observed on real hardware (when disc is stopped, so maybe it's different if disc is playing)
+			break;
+		case 0x45:	// clear
+			ld700i_clear();
 			break;
 		case 0x5F:	// repeated escapes are ignored (confirmed on real hardware)
 			u8NewCmdTimeoutVsyncCounter = NO_CHANGE;	// observed on real hardware, escapes by themselves do not cause ACK'
