@@ -364,6 +364,35 @@ TEST_F(LD700Tests, search_with_mixed_audio_squelch)
 	ld700i_on_vblank(m_curStatus);
 }
 
+TEST_F(LD700Tests, search_with_double_clear)
+{
+	m_curStatus = LD700_PAUSED;
+
+	// NOTE: For simplicity, commands are spaced out enough that EXT_ACK' deactivates before next command
+
+	// frame/time
+	ld700_write_helper_with_2_vblanks(LD700_TRUE, 0x41);
+	wait_vblanks_for_ext_ack_change(LD700_FALSE, 3);
+
+	ld700_write_helper_with_2_vblanks(LD700_TRUE, 1);
+	wait_vblanks_for_ext_ack_change(LD700_FALSE, 3);
+
+	ld700_write_helper_with_2_vblanks(LD700_TRUE, 0x45);	// clear	(resets current frame to 0)
+	wait_vblanks_for_ext_ack_change(LD700_FALSE, 3);
+
+	ld700_write_helper_with_2_vblanks(LD700_TRUE, 0x45);	// clear	(cancels 'enter a frame' mode)
+	wait_vblanks_for_ext_ack_change(LD700_FALSE, 3);
+
+	// we don't expect ACK' to go low again because 0x42 should not be accepted
+	EXPECT_CALL(mockLD700, OnExtAckChanged(LD700_TRUE)).Times(0);
+
+	ld700_write_helper(0x42);
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+}
+
 TEST_F(LD700Tests, seek_edge_cases_digits)
 {
 	EXPECT_CALL(mockLD700, BeginSearch(34567));
