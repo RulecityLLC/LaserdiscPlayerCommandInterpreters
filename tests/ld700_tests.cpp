@@ -421,6 +421,29 @@ TEST_F(LD700Tests, seek_edge_cases_digit2)
 	ld700_write_helper(0x42);	// execute search
 }
 
+TEST_F(LD700Tests, seek_no_ack)
+{
+	m_curStatus = LD700_STOPPED;
+
+	// when disc is stopped, seek commands should not ACK at all
+	EXPECT_CALL(mockLD700, OnExtAckChanged(LD700_TRUE)).Times(0);
+
+	ld700_write_helper(0x41);
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+
+	ld700_write_helper(1);
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+
+	ld700_write_helper(0x42);
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+	ld700i_on_vblank(m_curStatus);
+}
+
 TEST_F(LD700Tests, repeated_command_ignored)
 {
 	m_curStatus = LD700_PAUSED;
@@ -498,17 +521,13 @@ TEST_F(LD700Tests, enable_text_overlay)
 {
 	m_curStatus = LD700_STOPPED;
 	EXPECT_CALL(mockLD700, OnError(_, _)).Times(0);
-	EXPECT_CALL(mockLD700, OnExtAckChanged(_)).Times(0);	// no ACK expected
 
-	// make sure EXT_ACK' never changes
 	ld700_write_helper(0x5F);	// escape
 	ld700i_on_vblank(m_curStatus);
 	ld700i_on_vblank(m_curStatus);
 	ld700i_on_vblank(m_curStatus);
-	ld700_write_helper(0x07);	// enable text overlay
-	ld700i_on_vblank(m_curStatus);
-	ld700i_on_vblank(m_curStatus);
-	ld700i_on_vblank(m_curStatus);
+	ld700_write_helper_with_2_vblanks(LD700_TRUE, 0x07);	// enable text overlay
+	wait_vblanks_for_ext_ack_change(LD700_FALSE, 3);
 }
 
 TEST_F(LD700Tests, escape_by_itself_never_acks)
