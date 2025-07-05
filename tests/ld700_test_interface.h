@@ -13,6 +13,8 @@ public:
 	virtual void Eject() = 0;
 	virtual void BeginSearch(uint32_t) = 0;
 
+	virtual uint32_t GetCurrentPicNum() = 0;
+
 	virtual void OnExtAckChanged(LD700_BOOL bActive) = 0;
 
 	virtual void OnError(LD700ErrCode_t, uint8_t) = 0;

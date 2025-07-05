@@ -61,6 +61,9 @@ extern void (*g_ld700i_change_audio)(LD700_BOOL bEnableLeft, LD700_BOOL bEnableR
 // enables/disables audio squelch
 extern void (*g_ld700i_change_audio_squelch)(LD700_BOOL bSquelched);
 
+// retrieves the current picture number (only valid if disc is playing or paused)
+extern uint32_t (*g_ld700i_get_current_picnum)();
+
 // will get called every time the EXT ACK line changes. This line is active low, so bActive=true means the line has gone low.
 extern void (*g_ld700i_on_ext_ack_changed)(LD700_BOOL bActive);
 

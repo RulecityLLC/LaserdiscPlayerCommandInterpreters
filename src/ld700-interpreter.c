@@ -24,6 +24,7 @@ void (*g_ld700i_begin_search)(uint32_t uFrameNumber) = 0;
 void (*g_ld700i_change_audio)(LD700_BOOL bEnableLeft, LD700_BOOL bEnableRight) = 0;
 void (*g_ld700i_change_audio_squelch)(LD700_BOOL bSquelched) = 0;
 void (*g_ld700i_error)(LD700ErrCode_t code, uint8_t u8Val) = 0;
+uint32_t (*g_ld700i_get_current_picnum)() = 0;
 void (*g_ld700i_on_ext_ack_changed)(LD700_BOOL bActive) = 0;
 
 /////////////////////////
@@ -249,7 +250,18 @@ void ld700i_write(uint8_t u8Cmd, const LD700Status_t status)
 			g_ld700i_play();
 			break;
 		case 0x18:	// pause
-			g_ld700i_pause();
+			// If disc is already paused, a pause command will cause the screen to go blank briefly.
+			// Halcyon exploits during the 'voice print' stage to indicate to the user to speak the same word again.
+			// We simulate this by doing a search to the frame that we're already on.
+			if (status == LD700_PAUSED)
+			{
+				uint32_t u32Frame = g_ld700i_get_current_picnum();
+				g_ld700i_begin_search(u32Frame);
+			}
+			else
+			{
+				g_ld700i_pause();
+			}
 			break;
 		case 0x41:	// prepare to enter frame number
 
