@@ -10,6 +10,7 @@ public:
 	static void stop() { m_pInstance->Stop(); }
 	static void eject() { m_pInstance->Eject(); }
 	static void begin_search(uint32_t u32FrameNum) { m_pInstance->BeginSearch(u32FrameNum); }
+	static uint32_t get_cur_picnum() { return m_pInstance->GetCurrentPicNum(); }
 	static void on_ext_ack_changed(LD700_BOOL bActive) { m_pInstance->OnExtAckChanged(bActive); }
 	static void on_error(LD700ErrCode_t err, uint8_t val) { m_pInstance->OnError(err, val); }
 	static void change_audio(LD700_BOOL bEnableLeft, LD700_BOOL bEnableRight) { m_pInstance->ChangeAudio(bEnableLeft, bEnableRight); }
@@ -24,6 +25,7 @@ public:
 		g_ld700i_stop = stop;
 		g_ld700i_eject = eject;
 		g_ld700i_begin_search = begin_search;
+		g_ld700i_get_current_picnum = get_cur_picnum;
 		g_ld700i_on_ext_ack_changed = on_ext_ack_changed;
 		g_ld700i_error = on_error;
 		g_ld700i_change_audio = change_audio;
@@ -203,6 +205,17 @@ TEST_F(LD700Tests, pause)
 	EXPECT_CALL(mockLD700, Pause());
 	EXPECT_CALL(mockLD700, OnError(_, _)).Times(0);
 	m_curStatus = LD700_PLAYING;
+
+	ld700_write_helper_with_2_vblanks(LD700_TRUE, 0x18);
+	wait_vblanks_for_ext_ack_change(LD700_FALSE, 3);
+}
+
+TEST_F(LD700Tests, pause_when_paused)
+{
+	EXPECT_CALL(mockLD700, GetCurrentPicNum()).WillRepeatedly(Return(1234));
+	EXPECT_CALL(mockLD700, BeginSearch(1234)).Times(1);
+	EXPECT_CALL(mockLD700, OnError(_, _)).Times(0);
+	m_curStatus = LD700_PAUSED;
 
 	ld700_write_helper_with_2_vblanks(LD700_TRUE, 0x18);
 	wait_vblanks_for_ext_ack_change(LD700_FALSE, 3);
