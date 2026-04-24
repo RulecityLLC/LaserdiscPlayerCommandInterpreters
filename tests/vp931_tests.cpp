@@ -245,7 +245,7 @@ void test_vp931_audio_options()
 	uint8_t cmdbuf[3];
 
 	vp931_test_wrapper::setup(&mockVP931);
-	
+
 	EXPECT_CALL(mockVP931, OnError(VP931_ERR_UNSUPPORTED_CMD_BYTE, 0x02));
 
 	vp931i_reset();
@@ -259,4 +259,85 @@ void test_vp931_audio_options()
 TEST_CASE(vp931_audio_options)
 {
 	test_vp931_audio_options();
+}
+
+// Skip forward with a 3-digit BCD value (e.g. 345) exercises both the
+// hundreds-place multiplication and the ones-place addition in BCDtoHEX12.
+void test_vp931_skip_forward_345()
+{
+	MockVP931Test mockVP931;
+	uint8_t cmdbuf[3];
+
+	vp931_test_wrapper::setup(&mockVP931);
+
+	EXPECT_CALL(mockVP931, Skip(345));
+
+	vp931i_reset();
+
+	cmdbuf[0] = 0x00;
+	cmdbuf[1] = 0xE3;	// tens digit is 3 in high nibble of BCD_String[0]
+	cmdbuf[2] = 0x45;	// next two BCD digits: 4 and 5
+	vp931i_on_vsync(cmdbuf, 3, VP931_PLAYING);
+}
+
+TEST_CASE(vp931_skip_forward_345)
+{
+	test_vp931_skip_forward_345();
+}
+
+// Two commands packed into one vsync buffer must both be processed in order,
+// which requires the idx += 3 advance between commands.
+void test_vp931_two_commands_in_one_vsync()
+{
+	MockVP931Test mockVP931;
+	uint8_t cmdbuf[6];
+
+	vp931_test_wrapper::setup(&mockVP931);
+
+	{
+		InSequence s;
+		EXPECT_CALL(mockVP931, Pause());	// first command: pause
+		EXPECT_CALL(mockVP931, Skip(50));	// second command: skip forward 50
+	}
+
+	vp931i_reset();
+
+	// first command: pause
+	cmdbuf[0] = 0x00;
+	cmdbuf[1] = 0x20;
+	cmdbuf[2] = 0x00;
+	// second command: skip forward 50
+	cmdbuf[3] = 0x00;
+	cmdbuf[4] = 0xE0;
+	cmdbuf[5] = 0x50;
+
+	vp931i_on_vsync(cmdbuf, 6, VP931_PLAYING);
+}
+
+TEST_CASE(vp931_two_commands_in_one_vsync)
+{
+	test_vp931_two_commands_in_one_vsync();
+}
+
+// Status bytes for PLAYING should contain the VBI line18 split into three
+// bytes: high, middle, low.  With a non-zero middle byte, the `>> 8` shift
+// is distinguishable from a `<< 8` mutation (which would produce 0).
+void test_vp931_status_middle_byte()
+{
+	uint32_t u32VBILine18 = 0xf81234;	// middle byte = 0x12
+	uint8_t arrTestStatus[6];
+
+	vp931i_reset();
+
+	vp931i_get_status_bytes(u32VBILine18, VP931_PLAYING, arrTestStatus);
+
+	TEST_CHECK_EQUAL(0xF8, arrTestStatus[0]);
+	TEST_CHECK_EQUAL(0x12, arrTestStatus[1]);	// middle byte (>> 8)
+	TEST_CHECK_EQUAL(0x34, arrTestStatus[2]);
+	TEST_CHECK_EQUAL(0x04, arrTestStatus[3]);
+}
+
+TEST_CASE(vp931_status_middle_byte)
+{
+	test_vp931_status_middle_byte();
 }

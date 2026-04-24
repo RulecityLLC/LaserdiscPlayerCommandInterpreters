@@ -542,7 +542,7 @@ void test_pr8210_standby_end()
 	pr8210i_write(4 | (0x14 << 3));	// 4
 	pr8210i_write(4 | (0x15 << 3));	// 5
 	pr8210i_write(4 | (0x15 << 3));	// 5
-	
+
 	pr8210i_write(4 | (0xB << 3));	// SEARCH (B)
 	pr8210i_write(4 | (0xB << 3));	// SEARCH (B)
 
@@ -553,4 +553,70 @@ void test_pr8210_standby_end()
 TEST_CASE(pr8210_standby_end)
 {
 	test_pr8210_standby_end();
+}
+
+// The MACH 3-style end-of-command byte (0x00) must NOT trigger a corrupt-input
+// error.  This guards the `u16Msg != 0` check in pr8210i_write: without that
+// zero-exception, a raw 0x00 byte would be flagged as a corrupted message.
+void test_pr8210_zero_byte_no_error()
+{
+	MockPR8210Test mock;
+
+	pr8210_test_wrapper::setup(&mock);
+
+	// no error of any kind should fire for the 0x00 EOC byte
+	EXPECT_CALL(mock, OnError(PR8210_ERR_CORRUPT_INPUT, _)).Times(0);
+
+	pr8210i_reset();
+	pr8210i_write(0);	// MACH 3-style EOC
+	pr8210i_write(0);	// send again for good measure
+}
+
+TEST_CASE(pr8210_zero_byte_no_error)
+{
+	test_pr8210_zero_byte_no_error();
+}
+
+// The first time a command is received, it should be IGNORED (not acted on).
+// The command must arrive at least twice before the handler fires.  A mutation
+// that flips the `u8Cmd != u8OldMsg` check would instead execute the command
+// on the very first write.
+void test_pr8210_single_play_does_nothing()
+{
+	MockPR8210Test mock;
+
+	pr8210_test_wrapper::setup(&mock);
+
+	// Play should NOT be called from a single write
+	EXPECT_CALL(mock, Play()).Times(0);
+
+	pr8210i_reset();
+	pr8210i_write(4 | (5 << 3));	// one PLAY - nothing should fire
+}
+
+TEST_CASE(pr8210_single_play_does_nothing)
+{
+	test_pr8210_single_play_does_nothing();
+}
+
+// Follow-up: after one Pause, a single Play also must not fire (the Play is
+// a different command but still requires two consecutive writes).
+void test_pr8210_differing_single_commands()
+{
+	MockPR8210Test mock;
+
+	pr8210_test_wrapper::setup(&mock);
+
+	// neither Pause nor Play should fire from single writes
+	EXPECT_CALL(mock, Pause()).Times(0);
+	EXPECT_CALL(mock, Play()).Times(0);
+
+	pr8210i_reset();
+	pr8210i_write(4 | (0xA << 3));	// one PAUSE
+	pr8210i_write(4 | (5 << 3));	// one PLAY
+}
+
+TEST_CASE(pr8210_differing_single_commands)
+{
+	test_pr8210_differing_single_commands();
 }
