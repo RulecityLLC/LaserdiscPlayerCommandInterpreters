@@ -665,3 +665,259 @@ TEST_CASE(ldv1000_disable_super_mode)
 {
 	test_ldv1000_disable_super_mode();
 }
+
+// Exercises every ldv1000_add_digit branch in write_ldv1000i.  Each digit
+// command byte is sent and a search issued, verifying the correct frame is
+// passed to BeginSearch.
+void test_ldv1000_search_each_digit()
+{
+	const unsigned char cmds[10] = {
+		0x3F, // 0
+		0x0F, // 1
+		0x8F, // 2
+		0x4F, // 3
+		0x2F, // 4
+		0xAF, // 5
+		0x6F, // 6
+		0x1F, // 7
+		0x9F, // 8
+		0x5F  // 9
+	};
+
+	for (uint32_t uDigit = 0; uDigit < 10; uDigit++)
+	{
+		MockLDV1000Test mockLDV1000;
+		ldv1000_test_wrapper::setup(&mockLDV1000);
+
+		EXPECT_CALL(mockLDV1000, BeginSearch(uDigit));
+		EXPECT_CALL(mockLDV1000, GetStatus()).WillRepeatedly(Return(LDV1000_SEARCHING));
+
+		reset_ldv1000i(LDV1000_EMU_STANDARD);
+
+		write_ldv1000i(cmds[uDigit]);
+		write_ldv1000i(0xFF);	// no entry (become ready)
+		write_ldv1000i(0xF7);	// search
+	}
+}
+
+TEST_CASE(ldv1000_search_each_digit)
+{
+	test_ldv1000_search_each_digit();
+}
+
+// The clear command (0xBF) must actually empty the digit buffer; if the
+// clear call is optimized away, a search after 'digits then clear' would
+// still use the leftover digits.
+void test_ldv1000_clear_command_empties_buffer()
+{
+	MockLDV1000Test mockLDV1000;
+	ldv1000_test_wrapper::setup(&mockLDV1000);
+
+	EXPECT_CALL(mockLDV1000, BeginSearch(0));
+	EXPECT_CALL(mockLDV1000, GetStatus()).WillRepeatedly(Return(LDV1000_SEARCHING));
+
+	reset_ldv1000i(LDV1000_EMU_STANDARD);
+
+	// enter several digits (each digit write requires a 0xFF between to stay ready)
+	write_ldv1000i(0x0F);	// 1
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0x8F);	// 2
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0x4F);	// 3
+	write_ldv1000i(0xFF);
+
+	// a 0xBF clear must wipe those digits
+	write_ldv1000i(0xBF);	// clear
+	write_ldv1000i(0xFF);	// become ready again
+
+	write_ldv1000i(0xF7);	// search -> should be frame 0, not 123
+}
+
+TEST_CASE(ldv1000_clear_command_empties_buffer)
+{
+	test_ldv1000_clear_command_empties_buffer();
+}
+
+// After a search, the digit buffer must be cleared so a subsequent short
+// search does not inherit stale digits.
+void test_ldv1000_search_clears_buffer()
+{
+	MockLDV1000Test mockLDV1000;
+	ldv1000_test_wrapper::setup(&mockLDV1000);
+
+	{
+		InSequence s;
+		EXPECT_CALL(mockLDV1000, BeginSearch(999));
+		EXPECT_CALL(mockLDV1000, GetStatus()).WillRepeatedly(Return(LDV1000_SEARCHING));
+		EXPECT_CALL(mockLDV1000, BeginSearch(1));
+		EXPECT_CALL(mockLDV1000, GetStatus()).WillRepeatedly(Return(LDV1000_SEARCHING));
+	}
+
+	reset_ldv1000i(LDV1000_EMU_STANDARD);
+
+	write_ldv1000i(0x5F);	// 9
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0x5F);	// 9
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0x5F);	// 9
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0xF7);	// search -> 999
+
+	// A fresh single-digit search must go to 1, not 9991 (or similar)
+	write_ldv1000i(0xFF);	// become ready (after search output is 0x50)
+	write_ldv1000i(0x0F);	// 1
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0xF7);	// search -> 1
+}
+
+TEST_CASE(ldv1000_search_clears_buffer)
+{
+	test_ldv1000_search_clears_buffer();
+}
+
+// Autostop command (0xF3) reads the buffered frame AND must clear the buffer
+// so that subsequent commands depending on the digit buffer start fresh.
+void test_ldv1000_autostop_clears_buffer()
+{
+	MockLDV1000Test mockLDV1000;
+	ldv1000_test_wrapper::setup(&mockLDV1000);
+
+	// autostop should kick in play, then later BeginSearch(0) should fire for
+	// the subsequent 0xF7 search (proving the digit buffer was cleared)
+	EXPECT_CALL(mockLDV1000, Play());
+	EXPECT_CALL(mockLDV1000, BeginSearch(0));
+	EXPECT_CALL(mockLDV1000, GetCurFrameNum()).WillRepeatedly(Return(0));
+	EXPECT_CALL(mockLDV1000, GetStatus()).WillRepeatedly(Return(LDV1000_SEARCHING));
+
+	reset_ldv1000i(LDV1000_EMU_STANDARD);
+
+	write_ldv1000i(0x0F);	// 1
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0x8F);	// 2
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0x4F);	// 3
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0xF3);	// autostop - consumes the buffer
+
+	// now start a fresh search with no digits - should land on frame 0
+	write_ldv1000i(0xFF);	// no entry (we were mid-autostop - become ready)
+	write_ldv1000i(0xF7);	// search -> 0
+}
+
+TEST_CASE(ldv1000_autostop_clears_buffer)
+{
+	test_ldv1000_autostop_clears_buffer();
+}
+
+// The change_spinup_delay (0x94) extended command uses the last buffered digit
+// (bit 0) and then must clear the digit buffer.  Without the clear, a second
+// 0x94 sent with no fresh digit would re-use the stale digit instead of the
+// cleared (zero) value.
+void test_ldv1000_spinup_delay_clears_buffer()
+{
+	MockLDV1000Test mockLDV1000;
+	ldv1000_test_wrapper::setup(&mockLDV1000);
+
+	{
+		InSequence s;
+		EXPECT_CALL(mockLDV1000, ChangeSpinUpDelay(true));	// from digit '1'
+		EXPECT_CALL(mockLDV1000, ChangeSpinUpDelay(false));	// no digit, cleared -> 0
+	}
+
+	reset_ldv1000i(LDV1000_EMU_STANDARD);
+
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0x0F);	// digit '1'
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0x94);	// change_spinup_delay(true) and clear buffer
+
+	// no digit now; without the clear, buffer would still have '1'
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0x94);	// change_spinup_delay(false)
+}
+
+TEST_CASE(ldv1000_spinup_delay_clears_buffer)
+{
+	test_ldv1000_spinup_delay_clears_buffer();
+}
+
+// Same as above but for the change_seek_delay (0x95) command.
+void test_ldv1000_seek_delay_clears_buffer()
+{
+	MockLDV1000Test mockLDV1000;
+	ldv1000_test_wrapper::setup(&mockLDV1000);
+
+	{
+		InSequence s;
+		EXPECT_CALL(mockLDV1000, ChangeSeekDelay(true));	// from digit '1'
+		EXPECT_CALL(mockLDV1000, ChangeSeekDelay(false));	// cleared buffer -> 0
+	}
+
+	reset_ldv1000i(LDV1000_EMU_STANDARD);
+
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0x0F);	// digit '1'
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0x95);	// change_seek_delay(true) and clear
+
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0x95);	// change_seek_delay(false)
+}
+
+TEST_CASE(ldv1000_seek_delay_clears_buffer)
+{
+	test_ldv1000_seek_delay_clears_buffer();
+}
+
+// Skip forward command 0xB1..0xBa computes tracks_to_skip as 10 * (value & 0x0f).
+// Using a command with different low nibbles ensures the bitmask and multiply
+// are both checked.
+void test_ldv1000_skip_forward_values()
+{
+	MockLDV1000Test mockLDV1000;
+	ldv1000_test_wrapper::setup(&mockLDV1000);
+
+	{
+		InSequence s;
+		EXPECT_CALL(mockLDV1000, SkipForward(30));	// 0xB3
+		EXPECT_CALL(mockLDV1000, SkipForward(70));	// 0xB7
+		EXPECT_CALL(mockLDV1000, SkipForward(100));	// 0xBa
+	}
+
+	reset_ldv1000i(LDV1000_EMU_STANDARD);
+
+	write_ldv1000i(0xB3);
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0xB7);
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0xBa);
+}
+
+TEST_CASE(ldv1000_skip_forward_values)
+{
+	test_ldv1000_skip_forward_values();
+}
+
+// Skip backward command 0x31..0x39 computes tracks_to_skip as 10 * (value & 0x0f).
+void test_ldv1000_skip_backward_values()
+{
+	MockLDV1000Test mockLDV1000;
+	ldv1000_test_wrapper::setup(&mockLDV1000);
+
+	{
+		InSequence s;
+		EXPECT_CALL(mockLDV1000, SkipBackward(20));	// 0x32
+		EXPECT_CALL(mockLDV1000, SkipBackward(80));	// 0x38
+	}
+
+	reset_ldv1000i(LDV1000_EMU_STANDARD);
+
+	write_ldv1000i(0x32);
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0x38);
+}
+
+TEST_CASE(ldv1000_skip_backward_values)
+{
+	test_ldv1000_skip_backward_values();
+}

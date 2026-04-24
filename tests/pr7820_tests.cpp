@@ -215,3 +215,273 @@ TEST_CASE(pr7820_super_mode)
 {
 	test_pr7820_super_mode();
 }
+
+// Makes sure every digit 0-9 is correctly added to the frame buffer and
+// used as the search target.  This covers every pr7820_add_digit branch.
+void test_pr7820_search_each_digit()
+{
+	// mapping of digit -> command byte (derived from pr7820_interpreter.c switch)
+	const unsigned char cmds[10] = {
+		0x3F, // 0
+		0x0F, // 1
+		0x8F, // 2
+		0x4F, // 3
+		0x2F, // 4
+		0xAF, // 5
+		0x6F, // 6
+		0x1F, // 7
+		0x9F, // 8
+		0x5F  // 9
+	};
+
+	for (unsigned int uDigit = 0; uDigit < 10; uDigit++)
+	{
+		MockPR7820Test mock;
+		pr7820_test_wrapper::setup(&mock);
+
+		EXPECT_CALL(mock, BeginSearch(uDigit));
+
+		pr7820i_reset();
+		pr7820i_write(cmds[uDigit]);
+		pr7820i_write(0xF7);	// search
+	}
+}
+
+TEST_CASE(pr7820_search_each_digit)
+{
+	test_pr7820_search_each_digit();
+}
+
+// Makes sure a full 5-digit frame number uses every digit position correctly.
+void test_pr7820_search_full_frame()
+{
+	MockPR7820Test mock;
+
+	pr7820_test_wrapper::setup(&mock);
+
+	EXPECT_CALL(mock, BeginSearch(23456));
+
+	pr7820i_reset();
+	pr7820i_write(0x8F);	// 2
+	pr7820i_write(0x4F);	// 3
+	pr7820i_write(0x2F);	// 4
+	pr7820i_write(0xAF);	// 5
+	pr7820i_write(0x6F);	// 6
+	pr7820i_write(0xF7);	// search
+}
+
+TEST_CASE(pr7820_search_full_frame)
+{
+	test_pr7820_search_full_frame();
+}
+
+// After a search completes, the digit buffer must be cleared.  Without that
+// clear, a subsequent short search would inherit leftover digits.
+void test_pr7820_search_clears_buffer()
+{
+	MockPR7820Test mock;
+
+	pr7820_test_wrapper::setup(&mock);
+
+	{
+		InSequence s;
+		EXPECT_CALL(mock, BeginSearch(99));
+		EXPECT_CALL(mock, BeginSearch(1));
+	}
+
+	pr7820i_reset();
+	pr7820i_write(0x5F);	// 9
+	pr7820i_write(0x5F);	// 9
+	pr7820i_write(0xF7);	// search -> 99
+
+	// now search with a single new digit - must be just 1, not 991 or similar
+	pr7820i_write(0x0F);	// 1
+	pr7820i_write(0xF7);	// search -> 1
+}
+
+TEST_CASE(pr7820_search_clears_buffer)
+{
+	test_pr7820_search_clears_buffer();
+}
+
+// Reset must clear previously-buffered digits so that a subsequent search with
+// no digits seeks to frame 0.  Note: we enter digits but do NOT issue a search
+// (which would also clear) before the reset, so this specifically exercises
+// the clear() call inside pr7820i_reset().
+void test_pr7820_reset_clears_buffer()
+{
+	MockPR7820Test mock;
+
+	pr7820_test_wrapper::setup(&mock);
+
+	EXPECT_CALL(mock, BeginSearch(0));
+
+	pr7820i_reset();
+	pr7820i_write(0x0F);	// 1
+	pr7820i_write(0x8F);	// 2
+	// digits '12' are now buffered but no search was issued
+
+	// reset must wipe the pending digits
+	pr7820i_reset();
+	pr7820i_write(0xF7);	// search -> 0 (not 12)
+}
+
+TEST_CASE(pr7820_reset_clears_buffer)
+{
+	test_pr7820_reset_clears_buffer();
+}
+
+// Tests the 0xF4 (audio1) toggle command with no buffered digit.
+// Default audio-on -> first toggle turns off, second turns back on.
+void test_pr7820_audio1_toggle()
+{
+	MockPR7820Test mock;
+
+	pr7820_test_wrapper::setup(&mock);
+
+	{
+		InSequence s;
+		EXPECT_CALL(mock, ChangeAudio(0, 0));	// toggle off
+		EXPECT_CALL(mock, ChangeAudio(0, 1));	// toggle back on
+	}
+
+	pr7820i_reset();
+	pr7820i_write(0xF4);	// audio1 - toggle off
+	pr7820i_write(0xF4);	// audio1 - toggle on
+}
+
+TEST_CASE(pr7820_audio1_toggle)
+{
+	test_pr7820_audio1_toggle();
+}
+
+// Tests the 0xFC (audio2) toggle command with no buffered digit.
+void test_pr7820_audio2_toggle()
+{
+	MockPR7820Test mock;
+
+	pr7820_test_wrapper::setup(&mock);
+
+	{
+		InSequence s;
+		EXPECT_CALL(mock, ChangeAudio(1, 0));	// toggle off
+		EXPECT_CALL(mock, ChangeAudio(1, 1));	// toggle back on
+	}
+
+	pr7820i_reset();
+	pr7820i_write(0xFC);	// audio2 - toggle off
+	pr7820i_write(0xFC);	// audio2 - toggle on
+}
+
+TEST_CASE(pr7820_audio2_toggle)
+{
+	test_pr7820_audio2_toggle();
+}
+
+// Tests audio1 with an explicit digit buffered.  Even digit -> off, odd -> on.
+// This exercises the 'digit % 2' branch inside pr7820_audio1().
+void test_pr7820_audio1_explicit()
+{
+	MockPR7820Test mock;
+
+	pr7820_test_wrapper::setup(&mock);
+
+	{
+		InSequence s;
+		EXPECT_CALL(mock, ChangeAudio(0, 0));	// even digit -> off
+		EXPECT_CALL(mock, ChangeAudio(0, 1));	// odd digit -> on
+	}
+
+	pr7820i_reset();
+	pr7820i_write(0x8F);	// digit '2' (even)
+	pr7820i_write(0xF4);	// audio1 -> off
+
+	// buffer was cleared by audio1, so we re-enter a digit
+	pr7820i_write(0x4F);	// digit '3' (odd)
+	pr7820i_write(0xF4);	// audio1 -> on
+}
+
+TEST_CASE(pr7820_audio1_explicit)
+{
+	test_pr7820_audio1_explicit();
+}
+
+// Same as audio1_explicit but for audio2 / right channel.
+void test_pr7820_audio2_explicit()
+{
+	MockPR7820Test mock;
+
+	pr7820_test_wrapper::setup(&mock);
+
+	{
+		InSequence s;
+		EXPECT_CALL(mock, ChangeAudio(1, 0));	// even digit -> off
+		EXPECT_CALL(mock, ChangeAudio(1, 1));	// odd digit -> on
+	}
+
+	pr7820i_reset();
+	pr7820i_write(0x2F);	// digit '4' (even)
+	pr7820i_write(0xFC);	// audio2 -> off
+
+	pr7820i_write(0xAF);	// digit '5' (odd)
+	pr7820i_write(0xFC);	// audio2 -> on
+}
+
+TEST_CASE(pr7820_audio2_explicit)
+{
+	test_pr7820_audio2_explicit();
+}
+
+// The audio1 explicit-digit path clears the digit buffer after use.
+// Without that clear, the next audio1 command would go down the explicit
+// branch again (still seeing '2') instead of the toggle branch.
+void test_pr7820_audio1_clears_buffer()
+{
+	MockPR7820Test mock;
+
+	pr7820_test_wrapper::setup(&mock);
+
+	{
+		InSequence s;
+		EXPECT_CALL(mock, ChangeAudio(0, 0));	// explicit '2' -> off
+		EXPECT_CALL(mock, ChangeAudio(0, 1));	// toggle back on (only if buffer cleared)
+		EXPECT_CALL(mock, ChangeAudio(0, 0));	// toggle off again
+	}
+
+	pr7820i_reset();
+	pr7820i_write(0x8F);	// digit '2'
+	pr7820i_write(0xF4);	// audio1 -> off (must clear digit buffer)
+	pr7820i_write(0xF4);	// audio1 toggle: off -> on  (fails without clear: would be even->off)
+	pr7820i_write(0xF4);	// audio1 toggle: on -> off
+}
+
+TEST_CASE(pr7820_audio1_clears_buffer)
+{
+	test_pr7820_audio1_clears_buffer();
+}
+
+// Companion test for audio2 clearing the digit buffer.
+void test_pr7820_audio2_clears_buffer()
+{
+	MockPR7820Test mock;
+
+	pr7820_test_wrapper::setup(&mock);
+
+	{
+		InSequence s;
+		EXPECT_CALL(mock, ChangeAudio(1, 0));	// explicit '4' -> off
+		EXPECT_CALL(mock, ChangeAudio(1, 1));	// toggle back on
+		EXPECT_CALL(mock, ChangeAudio(1, 0));	// toggle off again
+	}
+
+	pr7820i_reset();
+	pr7820i_write(0x2F);	// digit '4'
+	pr7820i_write(0xFC);	// audio2 -> off (must clear digit buffer)
+	pr7820i_write(0xFC);	// audio2 toggle: off -> on
+	pr7820i_write(0xFC);	// audio2 toggle: on -> off
+}
+
+TEST_CASE(pr7820_audio2_clears_buffer)
+{
+	test_pr7820_audio2_clears_buffer();
+}
