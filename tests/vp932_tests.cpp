@@ -512,3 +512,149 @@ TEST_CASE(vp932_display)
 {
 	test_vp932_display();
 }
+
+// Sending an 'N' without a preceding 'F' must NOT initiate a search.  The
+// bSearchCmdActive flag guards this path; a mutation that initializes the
+// local to a non-zero value would incorrectly treat every 'N' as a completed
+// search command.
+void test_vp932_N_without_F_no_search()
+{
+	MockVP932Test mockVP932;
+
+	vp932_test_wrapper::setup(&mockVP932);
+
+	// no BeginSearch should be called
+	EXPECT_CALL(mockVP932, BeginSearch(_)).Times(0);
+	EXPECT_CALL(mockVP932, Play(_, _, _, _)).Times(0);
+
+	vp932i_reset();
+
+	// send digits and an 'N' with no preceding 'F' (unusual but possible)
+	test_write("123N\r");
+}
+
+TEST_CASE(vp932_N_without_F_no_search)
+{
+	test_vp932_N_without_F_no_search();
+}
+
+// A carriage-return by itself must not trigger any command processing.  This
+// catches a '<' to '<=' boundary mutation on the loop that walks rx_buf:
+// with '<=' an empty buffer would cause one bogus iteration reading past the
+// end.  We first send a step-forward command ('L') so that buf[0] contains
+// 'L'; then an empty CR would spuriously re-execute Step(false) under the
+// mutation.
+void test_vp932_empty_cr_no_replay()
+{
+	MockVP932Test mockVP932;
+
+	vp932_test_wrapper::setup(&mockVP932);
+
+	// only ONE Step(false) should fire, from the initial "L\r"
+	EXPECT_CALL(mockVP932, Step(false)).Times(1);
+
+	vp932i_reset();
+
+	test_write("L\r");	// processes 'L', leaves buf[0]='L', idx=0
+
+	// empty CR - no iteration should run
+	vp932i_write('\r');
+}
+
+TEST_CASE(vp932_empty_cr_no_replay)
+{
+	test_vp932_empty_cr_no_replay();
+}
+
+// Verify rx-buffer overflow protection.  The rx buffer holds 12 bytes.  On
+// the 13th input byte without a CR the interpreter must fire
+// VP932_ERR_RX_BUF_OVERFLOW exactly once.  A boundary mutation (< to <=)
+// would delay the overflow until the 14th byte.
+void test_vp932_rx_overflow()
+{
+	MockVP932Test mockVP932;
+
+	vp932_test_wrapper::setup(&mockVP932);
+
+	EXPECT_CALL(mockVP932, OnError(VP932_ERR_RX_BUF_OVERFLOW, 0)).Times(1);
+
+	vp932i_reset();
+
+	// write 12 filler bytes (all zero, which resets idx — so use '0' digits)
+	for (int i = 0; i < 12; i++)
+	{
+		vp932i_write('0');
+	}
+	// 13th byte must overflow
+	vp932i_write('0');
+
+	// flush the rx buffer so we don't leak idx state into subsequent tests
+	vp932i_write('\r');
+}
+
+TEST_CASE(vp932_rx_overflow)
+{
+	test_vp932_rx_overflow();
+}
+
+// Verify tx-buffer count tracks pushes/pops.  After search-play completes,
+// three bytes are pushed; can_read() must flip between can-read states
+// precisely as bytes are consumed.
+void test_vp932_tx_count_transitions()
+{
+	MockVP932Test mockVP932;
+
+	vp932_test_wrapper::setup(&mockVP932);
+
+	EXPECT_CALL(mockVP932, BeginSearch(42));
+	EXPECT_CALL(mockVP932, Play(1, 1, false, false));
+
+	vp932i_reset();
+
+	// nothing in the tx queue yet
+	TEST_CHECK_EQUAL(VP932_FALSE, vp932i_can_read());
+
+	test_write("F00042N\r");
+	vp932i_think_during_vblank(VP932_SEARCHING);
+	vp932i_think_during_vblank(VP932_PAUSED);
+
+	// should have exactly 3 bytes queued ("A1\r")
+	TEST_REQUIRE_EQUAL(VP932_TRUE, vp932i_can_read());
+	TEST_CHECK_EQUAL('A', vp932i_read());
+
+	TEST_REQUIRE_EQUAL(VP932_TRUE, vp932i_can_read());
+	TEST_CHECK_EQUAL('1', vp932i_read());
+
+	TEST_REQUIRE_EQUAL(VP932_TRUE, vp932i_can_read());
+	TEST_CHECK_EQUAL('\r', vp932i_read());
+
+	// queue must now be empty
+	TEST_CHECK_EQUAL(VP932_FALSE, vp932i_can_read());
+}
+
+TEST_CASE(vp932_tx_count_transitions)
+{
+	test_vp932_tx_count_transitions();
+}
+
+// An unknown byte must trigger OnError with the exact byte value passed in,
+// verifying that u8Val carries the right value (not the dead-store default).
+void test_vp932_unknown_cmd_passes_byte_value()
+{
+	MockVP932Test mockVP932;
+
+	vp932_test_wrapper::setup(&mockVP932);
+
+	// specifically check the u8Val argument, not just any value
+	EXPECT_CALL(mockVP932, OnError(VP932_ERR_UNKNOWN_CMD_BYTE, '~')).Times(1);
+
+	vp932i_reset();
+
+	vp932i_write('~');
+	vp932i_write('\r');
+}
+
+TEST_CASE(vp932_unknown_cmd_passes_byte_value)
+{
+	test_vp932_unknown_cmd_passes_byte_value();
+}

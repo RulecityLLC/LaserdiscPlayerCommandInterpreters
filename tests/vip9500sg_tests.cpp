@@ -539,3 +539,103 @@ TEST_CASE(vip9500sg_reset)
 {
 	test_vip9500sg_reset();
 }
+
+// The 0x68 reset command must actually reset the interpreter's state.  After
+// entering digits, sending 0x68 should wipe the digit buffer so that a
+// subsequent search reads frame 0 (not the previously-buffered digits).
+void test_vip9500sg_reset_clears_digits()
+{
+	MockVIP9500SGTest mockVIP;
+
+	vip9500sg_test_wrapper::setup(&mockVIP);
+
+	EXPECT_CALL(mockVIP, BeginSearch(0));
+	EXPECT_CALL(mockVIP, GetStatus()).WillRepeatedly(Return(VIP9500SG_PAUSED));
+
+	vip9500sgi_reset();
+
+	// enter digits that would search to 12345...
+	vip9500sgi_write(0x2b);	// start search
+	vip9500sgi_write('1');
+	vip9500sgi_write('2');
+	vip9500sgi_write('3');
+	vip9500sgi_write('4');
+	vip9500sgi_write('5');
+
+	// ...but then reset clears them
+	vip9500sgi_write(0x68);	// reset
+	TEST_REQUIRE_EQUAL(0xe8, vip9500sgi_read());
+
+	// subsequent search with no digits should go to frame 0
+	vip9500sgi_write(0x2b);	// start search
+	vip9500sgi_write(0x41);	// enter
+
+	vip9500sgi_think_after_vblank();
+
+	TEST_CHECK_EQUAL(0x41, vip9500sgi_read());
+	TEST_CHECK_EQUAL(0xb0, vip9500sgi_read());
+}
+
+TEST_CASE(vip9500sg_reset_clears_digits)
+{
+	test_vip9500sg_reset_clears_digits();
+}
+
+// A STUB command (like 0x3A "clear digits") is unsupported but must still
+// push a success-byte response.  This exercises the push_queue call in the
+// STUB branch.
+void test_vip9500sg_stub_cmd_returns_success()
+{
+	MockVIP9500SGTest mockVIP;
+
+	vip9500sg_test_wrapper::setup(&mockVIP);
+
+	EXPECT_CALL(mockVIP, OnError(VIP9500SG_ERR_UNSUPPORTED_CMD_BYTE, 0x3A));
+
+	vip9500sgi_reset();
+
+	TEST_CHECK_EQUAL(VIP9500SG_FALSE, vip9500sgi_can_read());
+	vip9500sgi_write(0x3A);	// clear digits - STUB with error + success byte
+
+	// must get the u8Byte | 0x80 success response
+	TEST_REQUIRE_EQUAL(VIP9500SG_TRUE, vip9500sgi_can_read());
+	TEST_CHECK_EQUAL(0xBA, vip9500sgi_read());	// 0x3A | 0x80
+	TEST_CHECK_EQUAL(VIP9500SG_FALSE, vip9500sgi_can_read());
+}
+
+TEST_CASE(vip9500sg_stub_cmd_returns_success)
+{
+	test_vip9500sg_stub_cmd_returns_success();
+}
+
+// If the disc enters an unexpected state while a search is pending, the
+// interpreter must push an error code (0x1D) onto the tx queue.
+void test_vip9500sg_search_unexpected_status()
+{
+	MockVIP9500SGTest mockVIP;
+
+	vip9500sg_test_wrapper::setup(&mockVIP);
+
+	EXPECT_CALL(mockVIP, BeginSearch(1));
+	// return PLAYING while we're waiting on a search to finish - unexpected
+	EXPECT_CALL(mockVIP, GetStatus()).WillRepeatedly(Return(VIP9500SG_PLAYING));
+
+	vip9500sgi_reset();
+
+	vip9500sgi_write(0x2b);	// start search
+	vip9500sgi_write('1');
+	vip9500sgi_write(0x41);	// enter -> starts search and pushes 0x41
+
+	TEST_CHECK_EQUAL(0x41, vip9500sgi_read());
+
+	// unexpected status -> pushes 0x1D error
+	vip9500sgi_think_after_vblank();
+
+	TEST_REQUIRE_EQUAL(VIP9500SG_TRUE, vip9500sgi_can_read());
+	TEST_CHECK_EQUAL(0x1D, vip9500sgi_read());
+}
+
+TEST_CASE(vip9500sg_search_unexpected_status)
+{
+	test_vip9500sg_search_unexpected_status();
+}

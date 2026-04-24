@@ -1425,7 +1425,7 @@ void test_ldp1000_skip_backward()
 
 	ldp1000i_write(0x40);	// enter
 	TEST_CHECK_EQUAL(LATACK_ENTER, ldp1000i_read());
-	
+
 	// verify that we also get a '1' after the ACK
 	TEST_CHECK_EQUAL(LATVAL_GENERIC | 1, ldp1000i_read());
 }
@@ -1433,4 +1433,457 @@ void test_ldp1000_skip_backward()
 TEST_CASE(ldp1000_skip_backward)
 {
 	test_ldp1000_skip_backward();
+}
+
+// Verifies that the tx-queue's count tracks push/pop precisely: ldp1000i_can_read
+// must be FALSE after reset, TRUE after a command that enqueues a byte, and back
+// to FALSE after the byte is consumed.  This exercises the post-increment in
+// push_queue and post-decrement in pop_queue.
+void test_ldp1000_queue_count_tracking()
+{
+	MockLDP1000Test mockLDP;
+	ldp1000_test_wrapper::setup(&mockLDP);
+
+	EXPECT_CALL(mockLDP, Pause());
+
+	ldp1000i_reset(LDP1000_EMU_LDP1000A);
+
+	// queue should be empty right after reset
+	TEST_CHECK_EQUAL(LDP1000_FALSE, ldp1000i_can_read());
+
+	// pause pushes exactly one byte
+	ldp1000i_write(0x4F);	// pause
+	TEST_CHECK_EQUAL(LDP1000_TRUE, ldp1000i_can_read());
+
+	// read it; queue must go empty
+	TEST_CHECK_EQUAL(LATACK_STILL, ldp1000i_read());
+	TEST_CHECK_EQUAL(LDP1000_FALSE, ldp1000i_can_read());
+}
+
+TEST_CASE(ldp1000_queue_count_tracking)
+{
+	test_ldp1000_queue_count_tracking();
+}
+
+// Multi-push variant: a status inquiry pushes 5 bytes, which must be readable
+// in order with can_read() ticking down to false after the last.
+void test_ldp1000_queue_count_multi()
+{
+	MockLDP1000Test mockLDP;
+	ldp1000_test_wrapper::setup(&mockLDP);
+
+	EXPECT_CALL(mockLDP, GetStatus()).WillOnce(Return(LDP1000_PAUSED));
+
+	ldp1000i_reset(LDP1000_EMU_LDP1450);
+
+	TEST_CHECK_EQUAL(LDP1000_FALSE, ldp1000i_can_read());
+	ldp1000i_write(0x67);	// status inquiry: 5 bytes queued
+
+	for (int i = 0; i < 5; i++)
+	{
+		TEST_REQUIRE_EQUAL(LDP1000_TRUE, ldp1000i_can_read());
+		ldp1000i_read();
+	}
+
+	// queue must be empty after all 5 bytes consumed
+	TEST_CHECK_EQUAL(LDP1000_FALSE, ldp1000i_can_read());
+}
+
+TEST_CASE(ldp1000_queue_count_multi)
+{
+	test_ldp1000_queue_count_multi();
+}
+
+// Step forward/reverse each push exactly one byte.  Verifying can_read()
+// transitions covers the push_queue calls that otherwise survive mutation
+// because residual bytes from prior tests may linger in the global tx_buf.
+void test_ldp1000_step_queue_state()
+{
+	MockLDP1000Test mockLDP;
+	ldp1000_test_wrapper::setup(&mockLDP);
+
+	EXPECT_CALL(mockLDP, StepForward());
+	EXPECT_CALL(mockLDP, StepReverse());
+
+	ldp1000i_reset(LDP1000_EMU_LDP1450);
+
+	TEST_CHECK_EQUAL(LDP1000_FALSE, ldp1000i_can_read());
+	ldp1000i_write(0x2B);	// step forward - must push LATACK_STILL
+	TEST_CHECK_EQUAL(LDP1000_TRUE, ldp1000i_can_read());
+	TEST_CHECK_EQUAL(LATACK_STILL, ldp1000i_read());
+	TEST_CHECK_EQUAL(LDP1000_FALSE, ldp1000i_can_read());
+
+	ldp1000i_write(0x2C);	// step reverse - must push LATACK_STILL
+	TEST_CHECK_EQUAL(LDP1000_TRUE, ldp1000i_can_read());
+	TEST_CHECK_EQUAL(LATACK_STILL, ldp1000i_read());
+	TEST_CHECK_EQUAL(LDP1000_FALSE, ldp1000i_can_read());
+}
+
+TEST_CASE(ldp1000_step_queue_state)
+{
+	test_ldp1000_step_queue_state();
+}
+
+// The STOP command (0x3F) both pushes a response byte and reports an
+// unsupported-command error.
+void test_ldp1000_stop_cmd()
+{
+	MockLDP1000Test mockLDP;
+	ldp1000_test_wrapper::setup(&mockLDP);
+
+	EXPECT_CALL(mockLDP, OnError(LDP1000_ERR_UNSUPPORTED_CMD_BYTE, 0x3F));
+
+	ldp1000i_reset(LDP1000_EMU_LDP1000A);
+
+	TEST_CHECK_EQUAL(LDP1000_FALSE, ldp1000i_can_read());
+	ldp1000i_write(0x3F);	// stop
+	TEST_REQUIRE_EQUAL(LDP1000_TRUE, ldp1000i_can_read());
+	TEST_CHECK_EQUAL(LATACK_PLAY, ldp1000i_read());	// stop returns same latency as play
+	TEST_CHECK_EQUAL(LDP1000_FALSE, ldp1000i_can_read());
+}
+
+TEST_CASE(ldp1000_stop_cmd)
+{
+	test_ldp1000_stop_cmd();
+}
+
+// Too-many-digits test: entering 6 digits into a search should accept 5 and
+// reject the 6th with an error plus a LATVAL_NUMBER|0xB response byte.
+void test_ldp1000_too_many_digits()
+{
+	MockLDP1000Test mockLDP;
+	ldp1000_test_wrapper::setup(&mockLDP);
+
+	EXPECT_CALL(mockLDP, Pause());
+	EXPECT_CALL(mockLDP, OnError(LDP1000_ERR_TOO_MANY_DIGITS, 0));
+
+	ldp1000i_reset(LDP1000_EMU_LDP1450);
+
+	ldp1000i_write(0x43);	// start search
+	TEST_CHECK_EQUAL(LATACK_ENTER, ldp1000i_read());
+
+	for (int i = 0; i < 5; i++)
+	{
+		ldp1000i_write('0' + i);
+		TEST_CHECK_EQUAL(LATACK_NUMBER, ldp1000i_read());
+	}
+
+	// the 6th digit must trigger TOO_MANY_DIGITS + a LATVAL_NUMBER|0xB push
+	ldp1000i_write('9');
+	TEST_REQUIRE_EQUAL(LDP1000_TRUE, ldp1000i_can_read());
+	TEST_CHECK_EQUAL(LATVAL_NUMBER | 0xB, ldp1000i_read());
+}
+
+TEST_CASE(ldp1000_too_many_digits)
+{
+	test_ldp1000_too_many_digits();
+}
+
+// Variable speed with frame value of 0 pauses the disc and pushes a LATACK_ENTER
+// response.  This exercises a branch that otherwise has no coverage.
+void test_ldp1000_multispeed_zero()
+{
+	MockLDP1000Test mockLDP;
+	ldp1000_test_wrapper::setup(&mockLDP);
+
+	{
+		InSequence s;
+		EXPECT_CALL(mockLDP, Play(1, 7, false, true));	// 0x3d initiates playback at 1/7X
+		EXPECT_CALL(mockLDP, Pause());	// value 0 pauses
+	}
+
+	ldp1000i_reset(LDP1000_EMU_LDP1450);
+
+	ldp1000i_write(0x3D);	// variable speed forward
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+
+	// enter with no digit buffered = frame number 0
+	ldp1000i_write(0x40);	// enter
+	TEST_REQUIRE_EQUAL(LDP1000_TRUE, ldp1000i_can_read());
+	TEST_CHECK_EQUAL(LATACK_ENTER, ldp1000i_read());
+	TEST_CHECK_EQUAL(LDP1000_FALSE, ldp1000i_can_read());
+}
+
+TEST_CASE(ldp1000_multispeed_zero)
+{
+	test_ldp1000_multispeed_zero();
+}
+
+// Variable speed with frame value > 255 returns NAK.
+void test_ldp1000_multispeed_out_of_range()
+{
+	MockLDP1000Test mockLDP;
+	ldp1000_test_wrapper::setup(&mockLDP);
+
+	EXPECT_CALL(mockLDP, Play(1, 7, false, true));	// 0x3d initiates playback at 1/7X
+
+	ldp1000i_reset(LDP1000_EMU_LDP1450);
+
+	ldp1000i_write(0x3D);	// variable speed forward
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+
+	// 256 is out of range (allowed range is 1..255 here)
+	ldp1000i_write('2');
+	TEST_CHECK_EQUAL(LATACK_NUMBER, ldp1000i_read());
+	ldp1000i_write('5');
+	TEST_CHECK_EQUAL(LATACK_NUMBER, ldp1000i_read());
+	ldp1000i_write('6');
+	TEST_CHECK_EQUAL(LATACK_NUMBER, ldp1000i_read());
+
+	ldp1000i_write(0x40);	// enter
+	TEST_REQUIRE_EQUAL(LDP1000_TRUE, ldp1000i_can_read());
+	TEST_CHECK_EQUAL(LATNAK_GENERIC, ldp1000i_read());
+}
+
+TEST_CASE(ldp1000_multispeed_out_of_range)
+{
+	test_ldp1000_multispeed_out_of_range();
+}
+
+// Skip backward also pushes a 'skip complete' result byte (LATVAL_GENERIC | 1).
+// The existing skip_backward test covers that; this one adds a smaller value
+// to exercise the skip callback differently and checks the queue state.
+void test_ldp1000_skip_backward_small()
+{
+	MockLDP1000Test mockLDP;
+	ldp1000_test_wrapper::setup(&mockLDP);
+
+	EXPECT_CALL(mockLDP, Pause());
+	EXPECT_CALL(mockLDP, Skip(-5));
+
+	ldp1000i_reset(LDP1000_EMU_LDP1450);
+
+	ldp1000i_write(0x2E);	// start skip backward
+	TEST_CHECK_EQUAL(LATACK_ENTER, ldp1000i_read());
+	ldp1000i_write('5');
+	TEST_CHECK_EQUAL(LATACK_NUMBER, ldp1000i_read());
+
+	ldp1000i_write(0x40);	// enter
+	TEST_REQUIRE_EQUAL(LDP1000_TRUE, ldp1000i_can_read());
+	TEST_CHECK_EQUAL(LATACK_ENTER, ldp1000i_read());
+	TEST_REQUIRE_EQUAL(LDP1000_TRUE, ldp1000i_can_read());
+	TEST_CHECK_EQUAL(LATVAL_GENERIC | 1, ldp1000i_read());
+	TEST_CHECK_EQUAL(LDP1000_FALSE, ldp1000i_can_read());
+}
+
+TEST_CASE(ldp1000_skip_backward_small)
+{
+	test_ldp1000_skip_backward_small();
+}
+
+// UI enable/disable must properly track the bUI_Enabled state.  Strictly
+// ordering text_enable_changed callbacks detects a mutant that flips the
+// equality check on bUI_Enabled (which would change the order of FALSE/TRUE
+// notifications).
+void test_ldp1000_ui_enable_state()
+{
+	MockLDP1000Test mockLDP;
+	ldp1000_test_wrapper::setup(&mockLDP);
+
+	{
+		InSequence s;
+		EXPECT_CALL(mockLDP, TextEnableChanged(true));	// first enable
+		EXPECT_CALL(mockLDP, TextEnableChanged(false));	// first disable
+	}
+
+	ldp1000i_reset(LDP1000_EMU_LDP1450);
+
+	// a redundant disable (already disabled after reset) must NOT fire a callback
+	ldp1000i_write(0x82);
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+
+	// first enable: must fire TextEnableChanged(true)
+	ldp1000i_write(0x81);
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+
+	// redundant enable: must NOT fire
+	ldp1000i_write(0x81);
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+
+	// disable: must fire TextEnableChanged(false)
+	ldp1000i_write(0x82);
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+
+	TEST_CHECK_EQUAL(LDP1000_FALSE, ldp1000i_can_read());
+}
+
+TEST_CASE(ldp1000_ui_enable_state)
+{
+	test_ldp1000_ui_enable_state();
+}
+
+// UIC mode change where only X coordinate changes.  Without the |=
+// NOTIFY_MODES bit being set, the final text_modes_changed callback won't
+// fire.  This covers the X-coordinate |= mutant.
+void test_ldp1000_uic_x_only()
+{
+	MockLDP1000Test mockLDP;
+	ldp1000_test_wrapper::setup(&mockLDP);
+
+	// after reset, X/Y/Mode are 0xFF.  we change only X and leave Y/Mode at 0xFF
+	// to isolate the X-coordinate notification accumulator.
+	EXPECT_CALL(mockLDP, TextModesChanged(0xFF, 0x05, 0xFF));
+
+	ldp1000i_reset(LDP1000_EMU_LDP1450);
+	ldp1000i_write(0x80);	// start UIC
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+	ldp1000i_write(0);	// set position and mode
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+	ldp1000i_write(0x05);	// X = 5 (changed from 0xFF)
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+	ldp1000i_write(0xFF);	// Y = 0xFF (unchanged)
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+	ldp1000i_write(0xFF);	// mode = 0xFF (unchanged)
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+}
+
+TEST_CASE(ldp1000_uic_x_only)
+{
+	test_ldp1000_uic_x_only();
+}
+
+// UIC mode change where only Y coordinate changes.  Covers the Y-coordinate
+// |= mutant (line 658).
+void test_ldp1000_uic_y_only()
+{
+	MockLDP1000Test mockLDP;
+	ldp1000_test_wrapper::setup(&mockLDP);
+
+	EXPECT_CALL(mockLDP, TextModesChanged(0xFF, 0xFF, 0x07));
+
+	ldp1000i_reset(LDP1000_EMU_LDP1450);
+	ldp1000i_write(0x80);	// start UIC
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+	ldp1000i_write(0);	// set position and mode
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+	ldp1000i_write(0xFF);	// X = 0xFF (unchanged)
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+	ldp1000i_write(0x07);	// Y = 7 (changed)
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+	ldp1000i_write(0xFF);	// mode = 0xFF (unchanged)
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+}
+
+TEST_CASE(ldp1000_uic_y_only)
+{
+	test_ldp1000_uic_y_only();
+}
+
+// UIC mode where NOTHING changes: no text_modes_changed callback should fire.
+// Covers the `& NOTIFY_MODES` mutant at line 718 (replacing & with |).
+void test_ldp1000_uic_no_change()
+{
+	MockLDP1000Test mockLDP;
+	ldp1000_test_wrapper::setup(&mockLDP);
+
+	// text_modes_changed must NOT be called since nothing changed
+	EXPECT_CALL(mockLDP, TextModesChanged(_, _, _)).Times(0);
+
+	ldp1000i_reset(LDP1000_EMU_LDP1450);
+	ldp1000i_write(0x80);	// start UIC
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+	ldp1000i_write(0);	// set position and mode
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+	ldp1000i_write(0xFF);	// X = 0xFF (unchanged)
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+	ldp1000i_write(0xFF);	// Y = 0xFF (unchanged)
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+	ldp1000i_write(0xFF);	// mode = 0xFF (unchanged)
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+}
+
+TEST_CASE(ldp1000_uic_no_change)
+{
+	test_ldp1000_uic_no_change();
+}
+
+// UIC text buffer starting-index parsing uses `u8Byte & 31`.  Sending 32 as the
+// start index should mask down to 0, so writing one character lands at buf[0].
+// The mutant that replaces & with | would instead give 32|31=63 which would
+// cause out-of-bounds behavior.
+void CheckUicStartIdxMasked(const uint8_t *p8Buf)
+{
+	// first byte of buffer should be the one we wrote (0x42)
+	TEST_REQUIRE_EQUAL(0x42, p8Buf[0]);
+	// none of the other positions should contain it
+	for (int i = 1; i < 32; i++)
+	{
+		TEST_REQUIRE_EQUAL(0, p8Buf[i]);
+	}
+}
+
+void test_ldp1000_uic_start_idx_masked()
+{
+	MockLDP1000Test mockLDP;
+	ldp1000_test_wrapper::setup(&mockLDP);
+
+	EXPECT_CALL(mockLDP, TextBufferContentsChanged(_)).WillOnce(Invoke(CheckUicStartIdxMasked));
+
+	ldp1000i_reset(LDP1000_EMU_LDP1450);
+
+	ldp1000i_write(0x80);	// start UIC
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+	ldp1000i_write(0x1);	// set buffer
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+	ldp1000i_write(32);	// start index 32 -> masked to 0
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+	ldp1000i_write(0x42);	// one character
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+	ldp1000i_write(0x1A);	// end-of-line
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+}
+
+TEST_CASE(ldp1000_uic_start_idx_masked)
+{
+	test_ldp1000_uic_start_idx_masked();
+}
+
+// Repeat where end-frame equals start-frame must play FORWARD (not reverse).
+// Exercises the `>=` boundary in the direction-of-repeat decision.
+void test_ldp1000_repeat_equal_frames()
+{
+	MockLDP1000Test mockLDP;
+	ldp1000_test_wrapper::setup(&mockLDP);
+
+	{
+		InSequence s;
+		EXPECT_CALL(mockLDP, GetCurFrame()).WillOnce(Return(500));
+		EXPECT_CALL(mockLDP, Pause());	// repeat always pauses
+		// when start == end, direction must be forward (bBackward = false)
+		EXPECT_CALL(mockLDP, Play(1, 1, false, false));
+		EXPECT_CALL(mockLDP, GetCurFrame()).WillOnce(Return(500));
+		EXPECT_CALL(mockLDP, Pause());	// last iteration stops
+	}
+
+	ldp1000i_reset(LDP1000_EMU_LDP1450);
+
+	ldp1000i_write(0x44);	// start repeat
+	TEST_CHECK_EQUAL(LATACK_GENERIC, ldp1000i_read());
+
+	// end frame 500 (same as current)
+	ldp1000i_write('0');
+	TEST_CHECK_EQUAL(LATACK_NUMBER, ldp1000i_read());
+	ldp1000i_write('0');
+	TEST_CHECK_EQUAL(LATACK_NUMBER, ldp1000i_read());
+	ldp1000i_write('5');
+	TEST_CHECK_EQUAL(LATACK_NUMBER, ldp1000i_read());
+	ldp1000i_write('0');
+	TEST_CHECK_EQUAL(LATACK_NUMBER, ldp1000i_read());
+	ldp1000i_write('0');
+	TEST_CHECK_EQUAL(LATACK_NUMBER, ldp1000i_read());
+
+	ldp1000i_write(0x40);	// enter
+	TEST_CHECK_EQUAL(LATACK_ENTER, ldp1000i_read());
+
+	// implied 1 iteration
+	ldp1000i_write(0x40);	// enter
+	TEST_CHECK_EQUAL(LATACK_ENTER, ldp1000i_read());
+
+	ldp1000i_think_during_vblank();
+	TEST_CHECK_EQUAL(LATVAL_GENERIC | 1, ldp1000i_read());
+}
+
+TEST_CASE(ldp1000_repeat_equal_frames)
+{
+	test_ldp1000_repeat_equal_frames();
 }

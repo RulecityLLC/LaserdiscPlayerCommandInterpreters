@@ -921,3 +921,354 @@ TEST_CASE(ldv1000_skip_backward_values)
 {
 	test_ldv1000_skip_backward_values();
 }
+
+// Multi-digit search where every digit slot matters.  This catches the
+// ldv1000_add_digit('0') mutant: if the '0' add is removed, a 3-digit number
+// like 102 would become 12 (one digit short).
+void test_ldv1000_multi_digit_with_zero()
+{
+	MockLDV1000Test mockLDV1000;
+	ldv1000_test_wrapper::setup(&mockLDV1000);
+
+	EXPECT_CALL(mockLDV1000, BeginSearch(102));
+	EXPECT_CALL(mockLDV1000, GetStatus()).WillRepeatedly(Return(LDV1000_SEARCHING));
+
+	reset_ldv1000i(LDV1000_EMU_STANDARD);
+
+	write_ldv1000i(0x0F);	// '1'
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0x3F);	// '0' - if this call is removed, search would be 12 not 102
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0x8F);	// '2'
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0xF7);	// search
+}
+
+TEST_CASE(ldv1000_multi_digit_with_zero)
+{
+	test_ldv1000_multi_digit_with_zero();
+}
+
+// Autostop behavior: after setting an autostop frame, reading status while the
+// player is playing past the target frame should trigger a pause and change
+// the output to 0x65 (paused).  The autostop frame itself is read via
+// get_buffered_frame() which uses atoi().
+void test_ldv1000_autostop_triggers_at_target()
+{
+	MockLDV1000Test mockLDV1000;
+	ldv1000_test_wrapper::setup(&mockLDV1000);
+
+	EXPECT_CALL(mockLDV1000, Play());
+	EXPECT_CALL(mockLDV1000, Pause());	// should fire when cur frame >= autostop frame
+	EXPECT_CALL(mockLDV1000, GetStatus()).WillRepeatedly(Return(LDV1000_PLAYING));
+
+	// mock cur-frame returns below then at/past the autostop value
+	{
+		InSequence s;
+		EXPECT_CALL(mockLDV1000, GetCurFrameNum()).WillOnce(Return(99));		// below target
+		EXPECT_CALL(mockLDV1000, GetCurFrameNum()).WillOnce(Return(100));	// at target -> pause
+	}
+
+	reset_ldv1000i(LDV1000_EMU_STANDARD);
+
+	// autostop to frame 100
+	write_ldv1000i(0x0F);	// '1'
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0x3F);	// '0'
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0x3F);	// '0'
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0xF3);	// autostop
+
+	// read before target: autostop active, output == 0x54 (not ready)
+	unsigned char ch = read_ldv1000i();
+	TEST_CHECK_EQUAL(0x54, ch);
+
+	// read at target: triggers pause and output becomes 0x65
+	ch = read_ldv1000i();
+	TEST_CHECK_EQUAL(0x65, ch);
+}
+
+TEST_CASE(ldv1000_autostop_triggers_at_target)
+{
+	test_ldv1000_autostop_triggers_at_target();
+}
+
+// A fresh 0xA3 (play at 1X) when the disc is not yet playing must call
+// Play() and squelch both audio channels.  If it is already playing, the
+// branch is skipped and only the speed is changed.
+void test_ldv1000_play_1x_from_stopped()
+{
+	MockLDV1000Test mockLDV1000;
+	ldv1000_test_wrapper::setup(&mockLDV1000);
+
+	{
+		InSequence s;
+		EXPECT_CALL(mockLDV1000, GetStatus()).WillOnce(Return(LDV1000_STOPPED));	// not playing
+		EXPECT_CALL(mockLDV1000, Play());
+		EXPECT_CALL(mockLDV1000, ChangeAudio(0, 0));
+		EXPECT_CALL(mockLDV1000, ChangeAudio(1, 0));
+		EXPECT_CALL(mockLDV1000, ChangeSpeed(1, 1));
+	}
+
+	reset_ldv1000i(LDV1000_EMU_STANDARD);
+
+	write_ldv1000i(0xA3);	// play at 1X
+}
+
+TEST_CASE(ldv1000_play_1x_from_stopped)
+{
+	test_ldv1000_play_1x_from_stopped();
+}
+
+// When the disc is already PLAYING, 0xA3 must skip the Play/ChangeAudio calls
+// and only change the speed.
+void test_ldv1000_play_1x_already_playing()
+{
+	MockLDV1000Test mockLDV1000;
+	ldv1000_test_wrapper::setup(&mockLDV1000);
+
+	EXPECT_CALL(mockLDV1000, GetStatus()).WillOnce(Return(LDV1000_PLAYING));
+	EXPECT_CALL(mockLDV1000, Play()).Times(0);	// must NOT be called
+	EXPECT_CALL(mockLDV1000, ChangeSpeed(1, 1));
+
+	reset_ldv1000i(LDV1000_EMU_STANDARD);
+
+	write_ldv1000i(0xA3);	// play at 1X
+}
+
+TEST_CASE(ldv1000_play_1x_already_playing)
+{
+	test_ldv1000_play_1x_already_playing();
+}
+
+// During a normal search, reading while GetStatus returns SEARCHING should
+// NOT trigger an OnError callback.  A mutation that flips the inequality check
+// on LDV1000_SEARCHING would cause OnError to fire.
+void test_ldv1000_searching_status_no_error()
+{
+	MockLDV1000Test mockLDV1000;
+	ldv1000_test_wrapper::setup(&mockLDV1000);
+
+	EXPECT_CALL(mockLDV1000, BeginSearch(100));
+	EXPECT_CALL(mockLDV1000, GetStatus()).WillRepeatedly(Return(LDV1000_SEARCHING));
+	// no OnError should fire during a normal search
+	EXPECT_CALL(mockLDV1000, OnError(_)).Times(0);
+
+	reset_ldv1000i(LDV1000_EMU_STANDARD);
+
+	write_ldv1000i(0x0F);	// '1'
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0x3F);	// '0'
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0x3F);	// '0'
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0xF7);	// search
+
+	// drain a few reads while search is in progress
+	for (int i = 0; i < 10; i++)
+	{
+		unsigned char ch = read_ldv1000i();
+		TEST_CHECK_EQUAL(0x50, ch);
+	}
+}
+
+TEST_CASE(ldv1000_searching_status_no_error)
+{
+	test_ldv1000_searching_status_no_error();
+}
+
+// When GetStatus returns something unexpected during search-pending, OnError
+// must be called with the "Unknown state after search" message.  This covers
+// both the sprintf call and the != LDV1000_SEARCHING check.
+bool g_ldv1000_saw_search_err_msg = false;
+void CaptureSearchErrMsg(const char *s)
+{
+	// the real message starts with "Unknown state after search"
+	if (s != NULL && s[0] == 'U')
+	{
+		g_ldv1000_saw_search_err_msg = true;
+	}
+}
+
+void test_ldv1000_unexpected_search_status()
+{
+	MockLDV1000Test mockLDV1000;
+	ldv1000_test_wrapper::setup(&mockLDV1000);
+
+	EXPECT_CALL(mockLDV1000, BeginSearch(50));
+
+	// Return an unexpected status (STOPPED) after the initial delay runs down.
+	// With delay=4, we need 4 decrements before the check triggers.
+	EXPECT_CALL(mockLDV1000, GetStatus()).WillRepeatedly(Return(LDV1000_STOPPED));
+	EXPECT_CALL(mockLDV1000, OnError(_)).WillRepeatedly(Invoke(CaptureSearchErrMsg));
+
+	reset_ldv1000i(LDV1000_EMU_STANDARD);
+	g_ldv1000_saw_search_err_msg = false;
+
+	write_ldv1000i(0xAF);	// '5'
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0x3F);	// '0'
+	write_ldv1000i(0xFF);
+	write_ldv1000i(0xF7);	// search
+
+	// drain reads until the delay iterations run out and the unknown-state
+	// branch fires
+	for (int i = 0; i < 10; i++)
+	{
+		read_ldv1000i();
+	}
+
+	TEST_CHECK_EQUAL(true, g_ldv1000_saw_search_err_msg);
+}
+
+TEST_CASE(ldv1000_unexpected_search_status)
+{
+	test_ldv1000_unexpected_search_status();
+}
+
+// Successful disc switch: a completed switch must leave the output at 0xD0
+// (ready + 0x50), which verifies the & 0x80 | 0x50 bitmask operations.
+void test_ldv1000_discswitch_success()
+{
+	uint8_t oldDiscId = 0x12;
+	uint8_t newDiscId = 0x34;
+
+	MockLDV1000Test mockLDV1000;
+	ldv1000_test_wrapper::setup(&mockLDV1000);
+
+	{
+		InSequence s;
+		EXPECT_CALL(mockLDV1000, GetStatus()).WillOnce(Return(LDV1000_STOPPED));	// initial state
+		EXPECT_CALL(mockLDV1000, QueryActiveDisc()).WillOnce(Return(oldDiscId));
+		EXPECT_CALL(mockLDV1000, BeginChangingToDisc(newDiscId));
+		EXPECT_CALL(mockLDV1000, GetStatus()).WillOnce(Return(LDV1000_DISC_SWITCHING));
+		EXPECT_CALL(mockLDV1000, GetStatus()).WillRepeatedly(Return(LDV1000_STOPPED));
+	}
+
+	reset_ldv1000i(LDV1000_EMU_STANDARD);
+
+	TEST_REQUIRE_EQUAL(0xFC, read_ldv1000i());	// ready
+	write_ldv1000i(0x93);	// prepare disc switch
+	write_ldv1000i(0xFF);
+	write_ldv1000i(newDiscId);	// switch command
+
+	unsigned char ch = read_ldv1000i();
+	TEST_CHECK_EQUAL(0x50, ch);	// busy
+
+	// send NO ENTRY to become ready again
+	write_ldv1000i(0xFF);
+	ch = read_ldv1000i();
+	TEST_CHECK_EQUAL(0xD0, ch);	// success (0x50 | 0x80)
+}
+
+TEST_CASE(ldv1000_discswitch_success)
+{
+	test_ldv1000_discswitch_success();
+}
+
+// An unexpected status during disc-switch must trigger OnError via the
+// "Unknown state after disc switch" path.
+bool g_ldv1000_saw_discswitch_err = false;
+void CaptureDiscSwitchErr(const char *s)
+{
+	// message: "Unknown state after disc switch: %x" — check for "disc" substring
+	if (s != NULL && strstr(s, "disc switch") != NULL)
+	{
+		g_ldv1000_saw_discswitch_err = true;
+	}
+}
+
+void test_ldv1000_discswitch_unexpected_status()
+{
+	uint8_t oldDiscId = 0x12;
+	uint8_t newDiscId = 0x34;
+
+	MockLDV1000Test mockLDV1000;
+	ldv1000_test_wrapper::setup(&mockLDV1000);
+
+	{
+		InSequence s;
+		EXPECT_CALL(mockLDV1000, GetStatus()).WillOnce(Return(LDV1000_STOPPED));	// initial
+		EXPECT_CALL(mockLDV1000, QueryActiveDisc()).WillOnce(Return(oldDiscId));
+		EXPECT_CALL(mockLDV1000, BeginChangingToDisc(newDiscId));
+		// after starting, return an unexpected status (PLAYING) to trigger error
+		EXPECT_CALL(mockLDV1000, GetStatus()).WillRepeatedly(Return(LDV1000_PLAYING));
+	}
+
+	EXPECT_CALL(mockLDV1000, OnError(_)).WillRepeatedly(Invoke(CaptureDiscSwitchErr));
+
+	reset_ldv1000i(LDV1000_EMU_STANDARD);
+	g_ldv1000_saw_discswitch_err = false;
+
+	read_ldv1000i();
+	write_ldv1000i(0x93);
+	write_ldv1000i(0xFF);
+	write_ldv1000i(newDiscId);
+
+	read_ldv1000i();
+	write_ldv1000i(0xFF);
+	read_ldv1000i();
+
+	TEST_CHECK_EQUAL(true, g_ldv1000_saw_discswitch_err);
+}
+
+TEST_CASE(ldv1000_discswitch_unexpected_status)
+{
+	test_ldv1000_discswitch_unexpected_status();
+}
+
+// Unsupported command must fire OnError with the "Unsupported Command" message.
+bool g_ldv1000_saw_unsup_msg = false;
+void CaptureUnsupMsg(const char *s)
+{
+	// two OnError calls happen: "Unsupported Command" then "%2x" of the byte.
+	if (s != NULL && strstr(s, "Unsupported") != NULL)
+	{
+		g_ldv1000_saw_unsup_msg = true;
+	}
+}
+
+void test_ldv1000_unsupported_command()
+{
+	MockLDV1000Test mockLDV1000;
+	ldv1000_test_wrapper::setup(&mockLDV1000);
+
+	EXPECT_CALL(mockLDV1000, OnError(_)).WillRepeatedly(Invoke(CaptureUnsupMsg));
+
+	reset_ldv1000i(LDV1000_EMU_STANDARD);
+	g_ldv1000_saw_unsup_msg = false;
+
+	write_ldv1000i(0x01);	// arbitrary unsupported command
+
+	TEST_CHECK_EQUAL(true, g_ldv1000_saw_unsup_msg);
+}
+
+TEST_CASE(ldv1000_unsupported_command)
+{
+	test_ldv1000_unsupported_command();
+}
+
+// Badlands emulation mode sets the high bit via add_digit.  Writing a digit
+// keeps the output in the 'ready' state (high bit set) for Badlands, whereas
+// in STANDARD mode the same digit write would leave the output not-ready.
+void test_ldv1000_badlands_add_digit_sets_ready()
+{
+	MockLDV1000Test mockLDV1000;
+	ldv1000_test_wrapper::setup(&mockLDV1000);
+
+	EXPECT_CALL(mockLDV1000, GetStatus()).WillRepeatedly(Return(LDV1000_STOPPED));
+
+	reset_ldv1000i(LDV1000_EMU_BADLANDS);
+
+	// after reset output is 0xFC (ready).  Writing a digit normally clears the
+	// high bit, but in Badlands mode add_digit re-sets it via |= 0x80.
+	write_ldv1000i(0x0F);	// digit '1'
+	unsigned char ch = read_ldv1000i();
+	TEST_CHECK_EQUAL(0xFC, ch);	// still ready
+}
+
+TEST_CASE(ldv1000_badlands_add_digit_sets_ready)
+{
+	test_ldv1000_badlands_add_digit_sets_ready();
+}
