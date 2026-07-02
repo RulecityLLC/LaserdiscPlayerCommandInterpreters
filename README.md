@@ -1,6 +1,8 @@
 # Laserdisc Player Command Interpreters
 A repository to hold interpreters for the command sets of various laserdisc players.
 
+This branch is out of date!  Do not commit it!
+
 # To build
 
 ## As part of Dexter's firmware
